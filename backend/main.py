@@ -4,10 +4,6 @@ from pydantic import BaseModel
 import os
 from dotenv import load_dotenv
 
-# ── Your existing imports ──────────────────────────────────────────────────────
-from app.bots.policy_bot import policy_bot
-from app.ingestion.ingest_documents import ingest_documents
-
 # ── New imports ────────────────────────────────────────────────────────────────
 from app.auth.router import router as auth_router
 from app.chat.router import router as chat_router
@@ -63,17 +59,21 @@ def home():
 
 @app.post("/ask")
 def ask_question(request: QuestionRequest):
-    # Kept exactly as-is so nothing breaks
+    from app.bots.policy_bot import policy_bot
+
     answer = policy_bot(request.question)
+
     return {
         "question": request.question,
         "answer": answer,
     }
 
-
 @app.post("/process")
 def process_documents():
+    from app.ingestion.ingest_documents import ingest_documents
+
     docs, chunks = ingest_documents()
+
     return {
         "pages": docs,
         "chunks": chunks,
