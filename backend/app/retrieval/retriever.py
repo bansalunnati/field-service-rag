@@ -1,4 +1,4 @@
-from langchain.schema import Document
+from langchain_core.documents import Document
 from app.ingestion.vector_store import get_vector_store
 from typing import List, Optional
 

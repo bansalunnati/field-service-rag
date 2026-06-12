@@ -1,6 +1,6 @@
 from collections import defaultdict
 from typing import Optional
-from langchain.schema import Document
+from langchain_core.documents import Document
 
 from app.ingestion.document_loader import load_documents, _detect_pipeline
 from app.ingestion.chunking import split_documents

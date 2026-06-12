@@ -1,5 +1,5 @@
 from langchain_community.vectorstores import Chroma
-from langchain.schema import Document
+from langchain_core.documents import Document
 from app.llm.embedding_config import embedding_model
 from typing import List
 
