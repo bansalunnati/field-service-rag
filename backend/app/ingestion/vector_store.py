@@ -1,6 +1,6 @@
 from langchain_community.vectorstores import Chroma
 from langchain_core.documents import Document
-from app.llm.embedding_config import embedding_model
+from app.llm.embedding_config import get_embedding_model
 from typing import List
 
 CHROMA_BASE_DIR = "chroma_db"
@@ -27,7 +27,7 @@ def create_vector_store(chunks: List[Document], pipeline: str = "general") -> Ch
     collection_name = get_collection_name(pipeline)
     vector_store = Chroma.from_documents(
         documents=chunks,
-        embedding=embedding_model,
+        embedding=get_embedding_model(),
         persist_directory=CHROMA_BASE_DIR,
         collection_name=collection_name,
     )
@@ -40,6 +40,6 @@ def get_vector_store(pipeline: str = "general") -> Chroma:
     collection_name = get_collection_name(pipeline)
     return Chroma(
         persist_directory=CHROMA_BASE_DIR,
-        embedding_function=embedding_model,
+        embedding_function=get_embedding_model(),
         collection_name=collection_name,
     )
