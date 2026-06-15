@@ -1,9 +1,3 @@
-"""
-auth/auth_service.py
-JWT creation/validation, bcrypt password hashing, role-based permissions.
-Matches your existing Azure OpenAI + dotenv style.
-"""
-
 import os
 from datetime import datetime, timedelta
 from typing import Optional
@@ -31,7 +25,6 @@ ROLE_PERMISSIONS = {
     "viewer": {"query"},
 }
 
-
 # ── Pydantic schemas ──────────────────────────────────────────────────────────
 
 class TokenData(BaseModel):
@@ -39,15 +32,12 @@ class TokenData(BaseModel):
     email:   str
     role:    str
 
-
 class Token(BaseModel):
     access_token: str
     token_type:   str
     role:         str
 
-
 # ── Password helpers ──────────────────────────────────────────────────────────
-
 def hash_password(password: str) -> str:
     return pwd_context.hash(password)
 
@@ -55,15 +45,12 @@ def hash_password(password: str) -> str:
 def verify_password(plain: str, hashed: str) -> bool:
     return pwd_context.verify(plain, hashed)
 
-
 # ── JWT helpers ───────────────────────────────────────────────────────────────
-
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     to_encode = data.copy()
     expire = datetime.utcnow() + (expires_delta or timedelta(minutes=TOKEN_EXPIRE_MINUTES))
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-
 
 def decode_token(token: str) -> TokenData:
     try:
@@ -80,9 +67,7 @@ def decode_token(token: str) -> TokenData:
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-
 # ── FastAPI dependencies ──────────────────────────────────────────────────────
-
 async def get_current_user(token: str = Depends(oauth2_scheme)) -> TokenData:
     return decode_token(token)
 

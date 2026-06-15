@@ -1,3 +1,15 @@
+"""
+ingestion/document_loader.py
+
+Loads PDF, DOCX, TXT, MD, and CSV files from a directory or as single files.
+Auto-detects the correct pipeline from the filename.
+
+Pipeline keys (updated in Phase 1):
+  equipment    → technical manuals, specs, maintenance guides
+  safety       → SOPs, policies, compliance docs, regulations
+  field_reports → submitted reports, general documents
+"""
+
 import os
 from typing import List, Optional
 from langchain_core.documents import Document
@@ -9,12 +21,19 @@ def load_documents(
     pipeline: Optional[str] = None,
 ) -> List[Document]:
     """
-    Drop-in replacement for your original load_documents().
-    Same signature — now also loads DOCX, TXT, MD, CSV.
-    Stamps each doc with source + pipeline metadata for citations.
+    Loads all supported files from a directory.
+    Stamps each document with source + pipeline metadata for citations.
+
+    Args:
+        data_path : Directory containing documents to ingest.
+        pipeline  : Override auto-detection and force all files into this pipeline.
+
+    Returns:
+        Flat list of LangChain Document objects.
     """
     documents = []
     files = os.listdir(data_path)
+
     print(f"\nFound {len(files)} files in '{data_path}'\n")
 
     for file in files:
@@ -50,8 +69,9 @@ def load_documents(
     return documents
 
 
+# ── Individual loaders ────────────────────────────────────────────────────────
+
 def _load_pdf(path: str) -> List[Document]:
-    # Your original loader — unchanged
     loader = PyPDFLoader(path)
     return loader.load()
 
@@ -80,6 +100,7 @@ def _load_csv(path: str) -> List[Document]:
         for row in reader:
             line = ", ".join(f"{k}: {v}" for k, v in row.items() if v)
             rows.append(line)
+
     docs = []
     for i in range(0, len(rows), 50):
         block = "\n".join(rows[i: i + 50])
@@ -90,10 +111,33 @@ def _load_csv(path: str) -> List[Document]:
     return docs
 
 
+# ── Pipeline auto-detection ───────────────────────────────────────────────────
+
 def _detect_pipeline(filename: str) -> str:
     name = filename.lower()
-    if any(k in name for k in ["manual", "service", "spec", "part", "equipment", "maintenance"]):
-        return "technical"
-    if any(k in name for k in ["policy", "compliance", "regulation", "procedure", "sop"]):
-        return "policy"
-    return "general"
+
+    # Hardcoded overrides for known seed files
+    hardcoded = {
+        "equipment and rules compliance.pdf": "equipment",
+        "hazardous materials field inspection checklist.pdf": "safety",
+        "sop telecom towers.pdf": "safety",
+    }
+    if name in hardcoded:
+        return hardcoded[name]
+
+    # Keyword fallback for any future files
+    safety_keywords = [
+        "hazardous", "inspection", "checklist", "sop", "procedure",
+        "regulation", "emergency", "protocol", "audit",
+    ]
+    equipment_keywords = [
+        "manual", "spec", "part", "maintenance", "asset",
+        "machine", "tool", "hardware", "calibration", "installation",
+    ]
+
+    if any(k in name for k in safety_keywords):
+        return "safety"
+    if any(k in name for k in equipment_keywords):
+        return "equipment"
+
+    return "field_reports"

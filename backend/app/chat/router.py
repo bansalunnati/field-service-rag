@@ -1,11 +1,18 @@
 """
 chat/router.py
+
 Endpoints:
   POST   /api/chat/sessions                    create session
   GET    /api/chat/sessions                    list user sessions
   DELETE /api/chat/sessions/{id}               delete session
   GET    /api/chat/sessions/{id}/messages      get messages with citations
   POST   /api/chat/sessions/{id}/query         ask a question, get answer + citations
+
+Phase 3.3: Added group-based access scope check before RAG query.
+  - Admins bypass the access check (they can query all pipelines).
+  - Employees must belong to a group that has been granted access to the
+    requested pipeline via the FileAccess table.
+  - Returns 403 with a clear message if the pipeline is not available to them.
 """
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -19,22 +26,76 @@ from app.chat.history_service import (
     create_session, get_sessions, get_session, delete_session,
     append_message, get_messages, build_context_window,
 )
+from app.chat.models import UserGroup, FileAccess
 from app.retrieval.rag_pipeline import ask_question_with_citations
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
-
 # ── Request / Response schemas ────────────────────────────────────────────────
 
 class SessionCreate(BaseModel):
-    pipeline: str = "policy"
+    pipeline: str = "safety"
     title:    str = "New chat"
-
 
 class QueryRequest(BaseModel):
     question: str
     pipeline: Optional[str] = None   # overrides session pipeline if provided
 
+# ── Access scope helper ───────────────────────────────────────────────────────
+
+def _check_pipeline_access(user: TokenData, pipeline: str, db: Session) -> None:
+    """
+    Verifies the current user is allowed to query the given pipeline.
+
+    Logic:
+      - Admins always pass — they can query all pipelines.
+      - Employees must belong to a group that has a FileAccess row for
+        the requested pipeline.
+      - If no group membership exists, or the group has not been granted
+        access to this pipeline, raises HTTP 403.
+
+    Args:
+        user     : The authenticated user (from JWT).
+        pipeline : The pipeline key being requested (e.g. "equipment").
+        db       : Active SQLAlchemy session.
+
+    Raises:
+        HTTPException 403 if access is denied.
+    """
+    # Admins bypass — they have unrestricted access to all pipelines.
+    if user.role == "admin":
+        return
+
+    # Look up the user's group memberships.
+    memberships = (
+        db.query(UserGroup)
+        .filter(UserGroup.user_id == user.user_id)
+        .all()
+    )
+
+    if not memberships:
+        raise HTTPException(
+            status_code=403,
+            detail="This document category is not available to your team.",
+        )
+
+    group_ids = [m.group_id for m in memberships]
+
+    # Check whether any of the user's groups have been granted this pipeline.
+    access = (
+        db.query(FileAccess)
+        .filter(
+            FileAccess.group_id.in_(group_ids),
+            FileAccess.pipeline == pipeline,
+        )
+        .first()
+    )
+
+    if not access:
+        raise HTTPException(
+            status_code=403,
+            detail="This document category is not available to your team.",
+        )
 
 # ── Session endpoints ─────────────────────────────────────────────────────────
 
@@ -78,6 +139,7 @@ async def session_messages(
 ):
     if not get_session(db, session_id, user.user_id):
         raise HTTPException(status_code=404, detail="Session not found")
+
     msgs = get_messages(db, session_id)
     return [
         {
@@ -89,7 +151,6 @@ async def session_messages(
         }
         for m in msgs
     ]
-
 
 # ── Query endpoint ────────────────────────────────────────────────────────────
 
@@ -105,12 +166,18 @@ async def query(
         raise HTTPException(status_code=404, detail="Session not found")
 
     pipeline = body.pipeline or session.pipeline
-    history  = build_context_window(db, session_id)
+
+    # ── Phase 3.3: Access scope check ─────────────────────────────────────────
+    # Runs before any RAG work. Admins pass freely; employees must have a
+    # matching FileAccess row for the requested pipeline.
+    _check_pipeline_access(user, pipeline, db)
+
+    history = build_context_window(db, session_id)
 
     # Save user message
     append_message(db, session_id, "user", body.question)
 
-    # Run RAG — uses your existing rag_pipeline.py
+    # Run RAG — uses existing rag_pipeline.py
     result = ask_question_with_citations(
         question=body.question,
         pipeline=pipeline,
