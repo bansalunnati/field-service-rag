@@ -1,8 +1,9 @@
 export default function Home() {
   return (
-    <main className="p-8">
-      <h1>Field Service RAG</h1>
-      <p>Frontend deployed successfully.</p>
-    </main>
+    <div className="flex min-h-screen items-center justify-center">
+      <h1 className="text-3xl font-bold">
+        Field Service Report Assistant
+      </h1>
+    </div>
   );
 }

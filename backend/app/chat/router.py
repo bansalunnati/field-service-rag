@@ -27,7 +27,17 @@ from app.chat.history_service import (
     append_message, get_messages, build_context_window,
 )
 from app.chat.models import UserGroup, FileAccess
-from app.retrieval.rag_pipeline import ask_question_with_citations
+
+@router.post("/sessions/{session_id}/query")
+async def query(...):
+
+    from app.retrieval.rag_pipeline import ask_question_with_citations
+
+    result = ask_question_with_citations(
+        question=body.question,
+        pipeline=pipeline,
+        history=history,
+    )
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
