@@ -1,17 +1,13 @@
 services:
   - type: web
     name: field-service-rag-api
-    runtime: python
+    runtime: docker
     region: oregon
     plan: free
-    rootDir: backend
-    buildCommand: apt-get install -y tesseract-ocr poppler-utils && pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
     healthCheckPath: /health
     envVars:
-      # ── Python version — forces 3.11; runtime.txt is unreliable on Render ────
-      - key: PYTHON_VERSION
-        value: "3.11.9"
       # ── Azure OpenAI ──────────────────────────────────────────────────────────
       - key: AZURE_OPENAI_API_KEY
         sync: false
@@ -25,7 +21,7 @@ services:
         sync: false
       # ── Auth ──────────────────────────────────────────────────────────────────
       - key: SECRET_KEY
-        generateValue: true          # Render generates a secure random value
+        generateValue: true
       - key: ACCESS_TOKEN_EXPIRE_MINUTES
         value: "60"
       # ── CORS — set to your Vercel URL after first deploy ─────────────────────
@@ -36,7 +32,7 @@ services:
         fromDatabase:
           name: field-service-rag-db
           property: connectionString
-      # ── File storage dirs (relative to rootDir) ───────────────────────────────
+      # ── File storage dirs (relative to workdir /app) ─────────────────────────
       - key: UPLOADS_DIR
         value: data/uploaded_files
       - key: REPORTS_DIR
