@@ -1,15 +1,10 @@
 import axios from "axios";
 import { useAuthStore } from "@/store/auth-store";
 
-if (!process.env.NEXT_PUBLIC_API_URL) {
-  console.warn(
-    "[api] NEXT_PUBLIC_API_URL is not set — falling back to http://localhost:8000 (dev only)"
-  );
-}
-
-const api = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000",
-});
+// No baseURL needed — Next.js rewrites /api/* to the backend (see next.config.ts).
+// In production: Vercel proxies to BACKEND_URL (server-side env var, set in Vercel dashboard).
+// In local dev: proxied to http://localhost:8000 (the default in next.config.ts).
+const api = axios.create();
 
 api.interceptors.request.use((config) => {
   const token = useAuthStore.getState().token;

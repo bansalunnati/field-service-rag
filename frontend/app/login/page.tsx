@@ -44,9 +44,6 @@ export default function LoginPage() {
           <p className="text-sm text-muted-foreground mt-1">
             Field Service Report Assistant
           </p>
-          <p className="text-xs text-muted-foreground mt-1 break-all">
-            API: {process.env.NEXT_PUBLIC_API_URL ?? "⚠️ NOT SET (using localhost)"}
-          </p>
         </div>
 
         <div className="space-y-2">
