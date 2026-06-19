@@ -24,67 +24,81 @@ from app.analytics.router import router as analytics_router
 load_dotenv()
 
 # ── Lifespan (replaces deprecated @app.on_event("startup")) ────────────────────
+def _col_exists(conn, table: str, column: str) -> bool:
+    """Check whether a column exists — works on both SQLite and PostgreSQL."""
+    result = conn.execute(text(
+        "SELECT 1 FROM information_schema.columns "
+        "WHERE table_name = :t AND column_name = :c"
+    ), {"t": table, "c": column})
+    return result.fetchone() is not None
+
+
 def _run_migrations():
     """Add/fix columns that were introduced or changed after initial DB creation."""
-    from app.chat.database import engine, Base
+    from app.chat.database import engine
     from sqlalchemy import text, inspect
 
     is_sqlite = engine.dialect.name == "sqlite"
 
-    with engine.connect() as conn:
-        # ── uploaded_files: add columns added in Phase 5 ───────────────────────
-        for col, definition in [
-            ("ocr_used",      "BOOLEAN DEFAULT FALSE"),
-            ("is_active",     "BOOLEAN DEFAULT TRUE"),
-            ("file_path",     "VARCHAR"),
-            ("original_name", "VARCHAR"),
-        ]:
-            try:
-                conn.execute(text(
-                    f"ALTER TABLE uploaded_files ADD COLUMN {col} {definition}"
-                ))
-                conn.commit()
-            except Exception:
-                pass  # column already exists — safe to ignore on both dialects
+    # ── uploaded_files: add columns added in Phase 5 ───────────────────────────
+    # Each column gets its own connection so a failure can't abort later ones.
+    for col, definition in [
+        ("ocr_used",      "BOOLEAN DEFAULT FALSE"),
+        ("is_active",     "BOOLEAN DEFAULT TRUE"),
+        ("file_path",     "VARCHAR"),
+        ("original_name", "VARCHAR"),
+    ]:
+        try:
+            with engine.connect() as conn:
+                if is_sqlite or not _col_exists(conn, "uploaded_files", col):
+                    conn.execute(text(
+                        f"ALTER TABLE uploaded_files ADD COLUMN {col} {definition}"
+                    ))
+                    conn.commit()
+        except Exception:
+            pass  # already exists on SQLite (information_schema not available)
 
-        # ── workflow_tasks: report_id must be nullable ─────────────────────────
-        # SQLite cannot DROP/ALTER column constraints so we recreate the table.
-        # PostgreSQL supports ALTER COLUMN … DROP NOT NULL directly.
-        inspector = inspect(engine)
-        if "workflow_tasks" in inspector.get_table_names():
-            cols = {c["name"]: c for c in inspector.get_columns("workflow_tasks")}
-            report_id_col = cols.get("report_id", {})
-            if report_id_col and not report_id_col.get("nullable", True):
-                if is_sqlite:
-                    conn.execute(text("PRAGMA foreign_keys = OFF"))
-                    conn.execute(text("""
-                        CREATE TABLE IF NOT EXISTS workflow_tasks_new (
-                            id          VARCHAR PRIMARY KEY,
-                            report_id   VARCHAR,
-                            title       VARCHAR NOT NULL,
-                            description TEXT    DEFAULT '',
-                            assigned_to VARCHAR REFERENCES users(id),
-                            status      VARCHAR DEFAULT 'open',
-                            priority    VARCHAR DEFAULT 'medium',
-                            due_date    DATETIME,
-                            created_at  DATETIME,
-                            updated_at  DATETIME
-                        )
-                    """))
-                    conn.execute(text(
-                        "INSERT OR IGNORE INTO workflow_tasks_new "
-                        "SELECT id, report_id, title, description, assigned_to, "
-                        "       status, priority, due_date, created_at, updated_at "
-                        "FROM workflow_tasks"
-                    ))
-                    conn.execute(text("DROP TABLE workflow_tasks"))
-                    conn.execute(text("ALTER TABLE workflow_tasks_new RENAME TO workflow_tasks"))
-                    conn.execute(text("PRAGMA foreign_keys = ON"))
-                else:
-                    conn.execute(text(
-                        "ALTER TABLE workflow_tasks ALTER COLUMN report_id DROP NOT NULL"
-                    ))
-                conn.commit()
+    # ── workflow_tasks: report_id must be nullable ─────────────────────────────
+    try:
+        with engine.connect() as conn:
+            inspector = inspect(engine)
+            if "workflow_tasks" in inspector.get_table_names():
+                cols = {c["name"]: c for c in inspector.get_columns("workflow_tasks")}
+                report_id_col = cols.get("report_id", {})
+                if report_id_col and not report_id_col.get("nullable", True):
+                    if is_sqlite:
+                        conn.execute(text("PRAGMA foreign_keys = OFF"))
+                        conn.execute(text("""
+                            CREATE TABLE IF NOT EXISTS workflow_tasks_new (
+                                id          VARCHAR PRIMARY KEY,
+                                report_id   VARCHAR,
+                                title       VARCHAR NOT NULL,
+                                description TEXT    DEFAULT '',
+                                assigned_to VARCHAR REFERENCES users(id),
+                                status      VARCHAR DEFAULT 'open',
+                                priority    VARCHAR DEFAULT 'medium',
+                                due_date    DATETIME,
+                                created_at  DATETIME,
+                                updated_at  DATETIME
+                            )
+                        """))
+                        conn.execute(text(
+                            "INSERT OR IGNORE INTO workflow_tasks_new "
+                            "SELECT id, report_id, title, description, assigned_to, "
+                            "       status, priority, due_date, created_at, updated_at "
+                            "FROM workflow_tasks"
+                        ))
+                        conn.execute(text("DROP TABLE workflow_tasks"))
+                        conn.execute(text("ALTER TABLE workflow_tasks_new RENAME TO workflow_tasks"))
+                        conn.execute(text("PRAGMA foreign_keys = ON"))
+                    else:
+                        conn.execute(text(
+                            "ALTER TABLE workflow_tasks "
+                            "ALTER COLUMN report_id DROP NOT NULL"
+                        ))
+                    conn.commit()
+    except Exception:
+        pass
 
 
 @asynccontextmanager
