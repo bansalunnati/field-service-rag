@@ -20,6 +20,7 @@ from app.chat.database import init_db
 from app.hitl.router import router as hitl_router
 from app.tasks.router import router as tasks_router
 from app.analytics.router import router as analytics_router
+from app.ragas.router import router as ragas_router
 
 load_dotenv()
 
@@ -53,6 +54,48 @@ def _run_migrations():
                 conn.commit()
         except Exception:
             pass  # SQLite: column already exists — safe to ignore
+
+    # ── query_logs: add ground_truth column (Phase 9) ─────────────────────────
+    try:
+        with engine.connect() as conn:
+            if is_sqlite:
+                conn.execute(text("ALTER TABLE query_logs ADD COLUMN ground_truth TEXT"))
+            else:
+                conn.execute(text("ALTER TABLE query_logs ADD COLUMN IF NOT EXISTS ground_truth TEXT"))
+            conn.commit()
+    except Exception:
+        pass
+
+    # ── ragas_scores table (Phase 9) ───────────────────────────────────────────
+    try:
+        with engine.connect() as conn:
+            if is_sqlite:
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS ragas_scores (
+                        id                 VARCHAR PRIMARY KEY,
+                        query_log_id       VARCHAR NOT NULL UNIQUE REFERENCES query_logs(id),
+                        faithfulness       VARCHAR,
+                        answer_relevancy   VARCHAR,
+                        context_precision  VARCHAR,
+                        context_recall     VARCHAR,
+                        created_at         DATETIME
+                    )
+                """))
+            else:
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS ragas_scores (
+                        id                 VARCHAR PRIMARY KEY,
+                        query_log_id       VARCHAR NOT NULL UNIQUE REFERENCES query_logs(id),
+                        faithfulness       VARCHAR,
+                        answer_relevancy   VARCHAR,
+                        context_precision  VARCHAR,
+                        context_recall     VARCHAR,
+                        created_at         TIMESTAMP
+                    )
+                """))
+            conn.commit()
+    except Exception:
+        pass
 
     # ── workflow_tasks: report_id must be nullable ─────────────────────────────
     try:
@@ -146,6 +189,7 @@ app.include_router(notifications_router)
 app.include_router(hitl_router)
 app.include_router(tasks_router)
 app.include_router(analytics_router)
+app.include_router(ragas_router)
 
 # ── Legacy endpoints (unchanged) ───────────────────────────────────────────────
 class QuestionRequest(BaseModel):

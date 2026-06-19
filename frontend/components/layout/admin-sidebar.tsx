@@ -12,11 +12,13 @@ import {
   Bell,
   BarChart2,
   FileLock2,
+  FlaskConical,
 } from "lucide-react";
 
 const menuItems = [
   { name: "Dashboard",    href: "/admin",              icon: LayoutDashboard, exact: true },
   { name: "Analytics",    href: "/admin/analytics",    icon: BarChart2 },
+  { name: "RAGAS Eval",   href: "/admin/ragas",         icon: FlaskConical },
   { name: "Policy Chat",  href: "/admin/chat",         icon: MessageSquare },
   { name: "Documents",    href: "/admin/documents",    icon: FolderOpen },
   { name: "Assign Files", href: "/admin/assign-files", icon: FileLock2 },

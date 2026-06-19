@@ -106,6 +106,7 @@ def query_logs(
                 "answer": (log.answer or "")[:200],
                 "latency_ms": log.latency_ms,
                 "error": log.error,
+                "ground_truth": log.ground_truth,
                 "timestamp": log.timestamp.isoformat() if log.timestamp else None,
             }
             for log in items

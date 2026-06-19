@@ -299,13 +299,39 @@ class QueryLog(Base):
     """
     __tablename__ = "query_logs"
 
-    id         = Column(String, primary_key=True, default=_uuid)
-    session_id = Column(String, ForeignKey("chat_sessions.id"), nullable=True, index=True)
-    user_id    = Column(String, ForeignKey("users.id"), nullable=True, index=True)
-    pipeline   = Column(String, nullable=False)
-    question   = Column(Text, nullable=False)
-    answer     = Column(Text, nullable=True)
-    chunk_ids  = Column(JSON, default=list)   # citation source IDs
-    latency_ms = Column(Integer, nullable=True)
-    error      = Column(Text, nullable=True)
-    timestamp  = Column(DateTime, default=datetime.utcnow, index=True)
+    id           = Column(String, primary_key=True, default=_uuid)
+    session_id   = Column(String, ForeignKey("chat_sessions.id"), nullable=True, index=True)
+    user_id      = Column(String, ForeignKey("users.id"), nullable=True, index=True)
+    pipeline     = Column(String, nullable=False)
+    question     = Column(Text, nullable=False)
+    answer       = Column(Text, nullable=True)
+    chunk_ids    = Column(JSON, default=list)   # citation source IDs
+    latency_ms   = Column(Integer, nullable=True)
+    error        = Column(Text, nullable=True)
+    ground_truth = Column(Text, nullable=True)  # optional reference answer for RAGAS
+    timestamp    = Column(DateTime, default=datetime.utcnow, index=True)
+
+    ragas_score = relationship("RAGASScore", back_populates="query_log", uselist=False)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Phase 9 — RAGAS Evaluation
+# ══════════════════════════════════════════════════════════════════════════════
+
+class RAGASScore(Base):
+    """
+    RAGAS evaluation result for one QueryLog entry.
+    Null metric values mean the metric was skipped (e.g. context_recall
+    when no ground_truth is available).
+    """
+    __tablename__ = "ragas_scores"
+
+    id                 = Column(String, primary_key=True, default=_uuid)
+    query_log_id       = Column(String, ForeignKey("query_logs.id"), unique=True, nullable=False, index=True)
+    faithfulness       = Column(String, nullable=True)   # stored as string to allow None gracefully
+    answer_relevancy   = Column(String, nullable=True)
+    context_precision  = Column(String, nullable=True)
+    context_recall     = Column(String, nullable=True)   # only when ground_truth present
+    created_at         = Column(DateTime, default=datetime.utcnow)
+
+    query_log = relationship("QueryLog", back_populates="ragas_score")
