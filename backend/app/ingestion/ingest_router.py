@@ -118,8 +118,15 @@ async def upload_document(
 
         if suffix in IMAGE_EXTENSIONS:
             # It's an image — always OCR it
-            from app.ingestion.ocr_service import extract_text_from_image
-            ocr_text, ocr_confidence = extract_text_from_image(tmp_path)
+            try:
+                from app.ingestion.ocr_service import extract_text_from_image
+                ocr_text, ocr_confidence = extract_text_from_image(tmp_path)
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"OCR failed for image '{file.filename}': {exc}. "
+                           "Ensure Tesseract is installed on the server (apt-get install -y tesseract-ocr).",
+                )
             ocr_used = True
             # Write extracted text to a temp .txt file for ingestion
             with tempfile.NamedTemporaryFile(suffix=".txt", delete=False, mode="w", encoding="utf-8") as txt_tmp:
@@ -128,13 +135,22 @@ async def upload_document(
 
         elif suffix == ".pdf":
             # Check if the PDF is scanned (no text layer)
-            from app.ingestion.ocr_service import is_scanned_pdf, extract_text_from_scanned_pdf
-            if is_scanned_pdf(tmp_path):
-                ocr_text, ocr_confidence = extract_text_from_scanned_pdf(tmp_path)
-                ocr_used = True
-                with tempfile.NamedTemporaryFile(suffix=".txt", delete=False, mode="w", encoding="utf-8") as txt_tmp:
-                    txt_tmp.write(ocr_text)
-                    ingest_path = txt_tmp.name
+            try:
+                from app.ingestion.ocr_service import is_scanned_pdf, extract_text_from_scanned_pdf
+                if is_scanned_pdf(tmp_path):
+                    ocr_text, ocr_confidence = extract_text_from_scanned_pdf(tmp_path)
+                    ocr_used = True
+                    with tempfile.NamedTemporaryFile(suffix=".txt", delete=False, mode="w", encoding="utf-8") as txt_tmp:
+                        txt_tmp.write(ocr_text)
+                        ingest_path = txt_tmp.name
+            except HTTPException:
+                raise
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"OCR failed for scanned PDF '{file.filename}': {exc}. "
+                           "Ensure Tesseract and poppler-utils are installed on the server.",
+                )
 
         try:
             result = ingest_single_file(ingest_path, pipeline=pipeline, file_id=new_file_id)
