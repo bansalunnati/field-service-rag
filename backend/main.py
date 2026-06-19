@@ -24,15 +24,6 @@ from app.analytics.router import router as analytics_router
 load_dotenv()
 
 # ── Lifespan (replaces deprecated @app.on_event("startup")) ────────────────────
-def _col_exists(conn, table: str, column: str) -> bool:
-    """Check whether a column exists — works on both SQLite and PostgreSQL."""
-    result = conn.execute(text(
-        "SELECT 1 FROM information_schema.columns "
-        "WHERE table_name = :t AND column_name = :c"
-    ), {"t": table, "c": column})
-    return result.fetchone() is not None
-
-
 def _run_migrations():
     """Add/fix columns that were introduced or changed after initial DB creation."""
     from app.chat.database import engine
@@ -41,7 +32,8 @@ def _run_migrations():
     is_sqlite = engine.dialect.name == "sqlite"
 
     # ── uploaded_files: add columns added in Phase 5 ───────────────────────────
-    # Each column gets its own connection so a failure can't abort later ones.
+    # PostgreSQL: ADD COLUMN IF NOT EXISTS is atomic — safe to run every startup.
+    # SQLite: no IF NOT EXISTS support, so catch the duplicate-column exception.
     for col, definition in [
         ("ocr_used",      "BOOLEAN DEFAULT FALSE"),
         ("is_active",     "BOOLEAN DEFAULT TRUE"),
@@ -50,13 +42,17 @@ def _run_migrations():
     ]:
         try:
             with engine.connect() as conn:
-                if is_sqlite or not _col_exists(conn, "uploaded_files", col):
+                if is_sqlite:
                     conn.execute(text(
                         f"ALTER TABLE uploaded_files ADD COLUMN {col} {definition}"
                     ))
-                    conn.commit()
+                else:
+                    conn.execute(text(
+                        f"ALTER TABLE uploaded_files ADD COLUMN IF NOT EXISTS {col} {definition}"
+                    ))
+                conn.commit()
         except Exception:
-            pass  # already exists on SQLite (information_schema not available)
+            pass  # SQLite: column already exists — safe to ignore
 
     # ── workflow_tasks: report_id must be nullable ─────────────────────────────
     try:
