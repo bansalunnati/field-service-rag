@@ -22,6 +22,7 @@ from app.auth.auth_service import TokenData, get_current_user
 from app.chat.database import get_db
 from app.chat.models import FieldReport, HITLReview, Notification, User
 from app.reports.reviewer import run_agentic_review
+from app.chat.models import FieldReport, HITLReview, Notification, User
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
@@ -29,7 +30,18 @@ REPORTS_DIR = os.getenv("REPORTS_DIR", "data/submitted_reports")
 ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt", ".md"}
 os.makedirs(REPORTS_DIR, exist_ok=True)
 
-
+def _notify_admins_new_report(db: Session, report: FieldReport, submitter_email: str):
+    """Notifies every admin that a new report has been submitted and needs eventual review."""
+    admin_ids = [u.id for u in db.query(User).filter(User.role == "admin").all()]
+    for admin_id in admin_ids:
+        db.add(Notification(
+            user_id=admin_id,
+            notification_type="new_report",
+            message=f"{submitter_email} submitted a new report: '{report.title}'",
+            ref_type="field_report",
+            ref_id=report.id,
+        ))
+    db.commit()
 # ── Auth helpers ──────────────────────────────────────────────────────────────
 
 def require_employee(user: TokenData = Depends(get_current_user)) -> TokenData:
@@ -95,7 +107,7 @@ async def submit_report(
     db.add(report)
     db.commit()
     db.refresh(report)
-
+    _notify_admins_new_report(db, report, submitter_email=user.email if hasattr(user, "email") else user.user_id)
     # Fire agentic review — non-blocking
     background_tasks.add_task(run_agentic_review, report_id, file_path, report_type)
 

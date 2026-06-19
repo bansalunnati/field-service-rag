@@ -18,6 +18,7 @@ Access Rules:
     - Employees can only query pipelines granted to their groups.
 """
 
+import time
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -35,7 +36,7 @@ from app.chat.history_service import (
     get_session,
     get_sessions,
 )
-from app.chat.models import FileAccess, UserGroup
+from app.chat.models import FileAccess, GroupFileAccess, QueryLog, UploadedFile, UserGroup
 from app.retrieval.rag_pipeline import ask_question_with_citations
 
 
@@ -90,7 +91,8 @@ def check_pipeline_access(
 
     group_ids = [membership.group_id for membership in memberships]
 
-    access = (
+    # Pipeline-level grant (set via Groups > Pipeline Access toggles)
+    pipeline_access = (
         db.query(FileAccess)
         .filter(
             FileAccess.group_id.in_(group_ids),
@@ -99,11 +101,24 @@ def check_pipeline_access(
         .first()
     )
 
-    if not access:
-        raise HTTPException(
-            status_code=403,
-            detail="This document category is not available to your team.",
+    if not pipeline_access:
+        # Fallback: check if ANY file from this pipeline has been explicitly
+        # assigned to one of the user's groups via Assign Files.
+        # This lets "Assign Files" also implicitly enable chat for that pipeline.
+        file_access = (
+            db.query(GroupFileAccess)
+            .join(UploadedFile, UploadedFile.id == GroupFileAccess.file_id)
+            .filter(
+                GroupFileAccess.group_id.in_(group_ids),
+                UploadedFile.pipeline == pipeline,
+            )
+            .first()
         )
+        if not file_access:
+            raise HTTPException(
+                status_code=403,
+                detail="This document category is not available to your team.",
+            )
 
 
 # ============================================================================
@@ -225,32 +240,71 @@ async def query(
 
     pipeline = body.pipeline or session.pipeline
 
-    # Verify access before running retrieval
-    check_pipeline_access(
-        user=user,
-        pipeline=pipeline,
-        db=db,
-    )
+    history = build_context_window(db, session_id)
 
-    history = build_context_window(
-        db,
-        session_id,
-    )
+    # Always store the user message so session history is never blank
+    append_message(db, session_id, "user", body.question)
 
-    # Store user message
-    append_message(
-        db,
-        session_id,
-        "user",
-        body.question,
-    )
+    # Verify pipeline access — store a friendly assistant message on 403
+    try:
+        check_pipeline_access(user=user, pipeline=pipeline, db=db)
+    except HTTPException as exc:
+        no_access_msg = exc.detail
+        append_message(db, session_id, "assistant", no_access_msg, citations=[])
+        raise
 
-    # Run RAG pipeline
-    result = ask_question_with_citations(
-        question=body.question,
-        pipeline=pipeline,
-        history=history,
-    )
+    # Resolve which file IDs the employee may retrieve from.
+    # Admins pass None → no filter (see all chunks).
+    # Employees pass only the file IDs their groups have been explicitly granted.
+    allowed_file_ids: Optional[list] = None
+    if user.role != "admin":
+        group_ids = [
+            ug.group_id
+            for ug in db.query(UserGroup).filter(UserGroup.user_id == user.user_id).all()
+        ]
+        if group_ids:
+            grants = (
+                db.query(GroupFileAccess)
+                .join(UploadedFile, UploadedFile.id == GroupFileAccess.file_id)
+                .filter(
+                    GroupFileAccess.group_id.in_(group_ids),
+                    UploadedFile.pipeline == pipeline,
+                )
+                .all()
+            )
+            allowed_file_ids = [g.file_id for g in grants]
+        else:
+            allowed_file_ids = []  # no group membership → empty result set
+
+    # Run RAG pipeline with latency tracking
+    t0 = time.monotonic()
+    error_text = None
+    result = {"answer": "", "citations": []}
+    try:
+        result = ask_question_with_citations(
+            question=body.question,
+            pipeline=pipeline,
+            history=history,
+            allowed_file_ids=allowed_file_ids,
+        )
+    except Exception as exc:
+        error_text = str(exc)
+        raise
+    finally:
+        latency_ms = int((time.monotonic() - t0) * 1000)
+        chunk_ids = [c.get("source", "") for c in result.get("citations", [])]
+        log = QueryLog(
+            session_id=session_id,
+            user_id=user.user_id,
+            pipeline=pipeline,
+            question=body.question,
+            answer=result.get("answer"),
+            chunk_ids=chunk_ids,
+            latency_ms=latency_ms,
+            error=error_text,
+        )
+        db.add(log)
+        db.commit()
 
     # Store assistant response
     assistant_message = append_message(

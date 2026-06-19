@@ -109,6 +109,7 @@ class Group(Base):
 
     members       = relationship("UserGroup",   back_populates="group", cascade="all, delete-orphan")
     file_accesses = relationship("FileAccess",  back_populates="group", cascade="all, delete-orphan")
+    file_grants   = relationship("GroupFileAccess", back_populates="group", cascade="all, delete-orphan")
 
 
 class UserGroup(Base):
@@ -146,29 +147,46 @@ class FileAccess(Base):
 
     group = relationship("Group", back_populates="file_accesses")
 
+class GroupFileAccess(Base):
+    """
+    Per-individual-file visibility grant for the employee-facing Files UI.
+ 
+    Admin picks exact files a group is allowed to see/open — distinct from
+    FileAccess (pipeline-level chat retrieval access, unchanged).
+ 
+    e.g. Even if "Electrical" group has FileAccess to the "equipment"
+    pipeline (so chat can retrieve from it), they will only SEE / be able
+    to OPEN "motor_spec_v2.pdf" in the Files page if an admin explicitly
+    grants it via GroupFileAccess.
+    """
+    __tablename__ = "group_file_access"
+ 
+    id         = Column(String, primary_key=True, default=_uuid)
+    group_id   = Column(String, ForeignKey("groups.id"), nullable=False, index=True)
+    file_id    = Column(String, ForeignKey("uploaded_files.id"), nullable=False, index=True)
+    granted_at = Column(DateTime, default=datetime.utcnow)
+ 
+    group = relationship("Group", back_populates="file_grants")
+    file  = relationship("UploadedFile", back_populates="group_accesses")
+
 
 class UploadedFile(Base):
-    """
-    Registry of every file that has been ingested into ChromaDB.
-
-    Tracks who uploaded it, when, which collection it went into,
-    how many chunks were created, and whether OCR was used.
-    Used by the admin UI to list and manage ingested documents.
-    """
     __tablename__ = "uploaded_files"
-
+ 
     id            = Column(String, primary_key=True, default=_uuid)
     filename      = Column(String, nullable=False)
-    original_name = Column(String, nullable=False)         # name before any sanitisation
-    file_type     = Column(String, nullable=False)         # "pdf" | "docx" | "txt" | "csv" | "md"
-    pipeline      = Column(String, nullable=False)         # which ChromaDB collection
+    original_name = Column(String, nullable=False)
+    file_type     = Column(String, nullable=False)
+    pipeline      = Column(String, nullable=False)
     chunk_count   = Column(Integer, default=0)
     ocr_used      = Column(Boolean, default=False)
+    is_active     = Column(Boolean, default=True)
+    file_path     = Column(String, nullable=True)   # original file on disk, for in-browser viewing only
     uploaded_by   = Column(String, ForeignKey("users.id"), nullable=False, index=True)
     uploaded_at   = Column(DateTime, default=datetime.utcnow)
-
+ 
     uploaded_by_user = relationship("User", back_populates="uploaded_files")
-
+    group_accesses    = relationship("GroupFileAccess", back_populates="file", cascade="all, delete-orphan")
 
 class FieldReport(Base):
     """
@@ -229,7 +247,7 @@ class WorkflowTask(Base):
     __tablename__ = "workflow_tasks"
 
     id          = Column(String, primary_key=True, default=_uuid)
-    report_id   = Column(String, ForeignKey("field_reports.id"), nullable=False, index=True)
+    report_id   = Column(String, ForeignKey("field_reports.id"), nullable=True, index=True)
     title       = Column(String, nullable=False)
     description = Column(Text, default="")
     assigned_to = Column(String, ForeignKey("users.id"), nullable=True, index=True)
@@ -268,3 +286,26 @@ class Notification(Base):
     created_at        = Column(DateTime, default=datetime.utcnow)
 
     user = relationship("User", back_populates="notifications")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Phase 8 — Observability
+# ══════════════════════════════════════════════════════════════════════════════
+
+class QueryLog(Base):
+    """
+    One row per chat query sent through the RAG pipeline.
+    Captures latency, retrieved chunk IDs, and any error for analytics.
+    """
+    __tablename__ = "query_logs"
+
+    id         = Column(String, primary_key=True, default=_uuid)
+    session_id = Column(String, ForeignKey("chat_sessions.id"), nullable=True, index=True)
+    user_id    = Column(String, ForeignKey("users.id"), nullable=True, index=True)
+    pipeline   = Column(String, nullable=False)
+    question   = Column(Text, nullable=False)
+    answer     = Column(Text, nullable=True)
+    chunk_ids  = Column(JSON, default=list)   # citation source IDs
+    latency_ms = Column(Integer, nullable=True)
+    error      = Column(Text, nullable=True)
+    timestamp  = Column(DateTime, default=datetime.utcnow, index=True)

@@ -21,7 +21,7 @@ from typing import Optional
 
 from app.auth.auth_service import get_current_user, TokenData
 from app.chat.database import get_db
-from app.chat.models import Group, UserGroup, User
+from app.chat.models import Group, UserGroup, User, Notification
 
 router = APIRouter(prefix="/api/groups", tags=["groups"])
 
@@ -91,6 +91,27 @@ async def list_groups(
     ]
 
 
+@router.get("/my")
+async def my_groups(
+    db: Session = Depends(get_db),
+    user: TokenData = Depends(get_current_user),
+):
+    """Returns the groups the current user belongs to, with peer members."""
+    memberships = db.query(UserGroup).filter(UserGroup.user_id == user.user_id).all()
+    result = []
+    for m in memberships:
+        group = db.query(Group).filter(Group.id == m.group_id).first()
+        if group:
+            members = _get_members(db, group.id)
+            result.append({
+                "id": group.id,
+                "name": group.name,
+                "description": group.description,
+                "members": members,
+            })
+    return result
+
+
 @router.get("/{group_id}")
 async def get_group(
     group_id: str,
@@ -140,7 +161,11 @@ async def add_member(
     if not group:
         raise HTTPException(status_code=404, detail="Group not found")
 
-    target_user = db.query(User).filter(User.id == body.user_id).first()
+    # Accept either user_id (UUID) or email
+    target_user = (
+        db.query(User).filter(User.id == body.user_id).first()
+        or db.query(User).filter(User.email == body.user_id).first()
+    )
     if not target_user:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -156,13 +181,22 @@ async def add_member(
             detail=f"User '{target_user.email}' is already a member of this group",
         )
 
-    membership = UserGroup(user_id=body.user_id, group_id=group_id)
+    membership = UserGroup(user_id=target_user.id, group_id=group_id)
     db.add(membership)
+
+    # Notify the employee they've been added to a group
+    db.add(Notification(
+        user_id=target_user.id,
+        notification_type="group_added",
+        message=f"You have been added to the group '{group.name}'.",
+        ref_type="group",
+        ref_id=group_id,
+    ))
     db.commit()
 
     return {
         "message": f"'{target_user.email}' added to group '{group.name}'",
-        "user_id": body.user_id,
+        "user_id": target_user.id,
         "group_id": group_id,
     }
 

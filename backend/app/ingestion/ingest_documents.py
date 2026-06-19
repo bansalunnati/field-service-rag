@@ -60,7 +60,7 @@ def ingest_documents(
     return len(all_docs), total_chunks
 
 
-def ingest_single_file(file_path: str, pipeline: Optional[str] = None) -> dict:
+def ingest_single_file(file_path: str, pipeline: Optional[str] = None, file_id: Optional[str] = None) -> dict:
     """
     Ingests a single uploaded file into the correct ChromaDB collection.
 
@@ -113,8 +113,14 @@ def ingest_single_file(file_path: str, pipeline: Optional[str] = None) -> dict:
     for doc in docs:
         doc.metadata["source"]   = filename
         doc.metadata["pipeline"] = detected_pipeline
+        if file_id:
+            doc.metadata["file_id"] = file_id
 
     chunks = split_documents(docs, pipeline=detected_pipeline)
+    # Propagate file_id onto every chunk (split_documents copies metadata)
+    if file_id:
+        for chunk in chunks:
+            chunk.metadata["file_id"] = file_id
     create_vector_store(chunks, pipeline=detected_pipeline)
 
     return {

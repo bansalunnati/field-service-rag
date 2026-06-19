@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -16,21 +18,93 @@ from app.reports.router import router as reports_router
 from app.notifications.router import router as notifications_router
 from app.chat.database import init_db
 from app.hitl.router import router as hitl_router
+from app.tasks.router import router as tasks_router
+from app.analytics.router import router as analytics_router
 
 load_dotenv()
+
+# ── Lifespan (replaces deprecated @app.on_event("startup")) ────────────────────
+def _run_migrations():
+    """Add/fix columns that were introduced or changed after initial DB creation."""
+    from app.chat.database import engine, Base
+    from sqlalchemy import text, inspect
+
+    with engine.connect() as conn:
+        # ── uploaded_files: add columns added in Phase 5 ───────────────────────
+        for stmt in [
+            "ALTER TABLE uploaded_files ADD COLUMN ocr_used BOOLEAN DEFAULT 0",
+            "ALTER TABLE uploaded_files ADD COLUMN is_active BOOLEAN DEFAULT 1",
+            "ALTER TABLE uploaded_files ADD COLUMN file_path VARCHAR",
+            "ALTER TABLE uploaded_files ADD COLUMN original_name VARCHAR",
+        ]:
+            try:
+                conn.execute(text(stmt))
+                conn.commit()
+            except Exception:
+                pass  # column already exists
+
+        # ── workflow_tasks: report_id must be nullable for admin-created tasks ─
+        # SQLite cannot ALTER column constraints, so check and recreate if needed.
+        inspector = inspect(engine)
+        if "workflow_tasks" in inspector.get_table_names():
+            cols = {c["name"]: c for c in inspector.get_columns("workflow_tasks")}
+            report_id_col = cols.get("report_id", {})
+            # get_columns returns nullable=False when NOT NULL constraint exists
+            if report_id_col and not report_id_col.get("nullable", True):
+                conn.execute(text("PRAGMA foreign_keys = OFF"))
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS workflow_tasks_new (
+                        id          VARCHAR PRIMARY KEY,
+                        report_id   VARCHAR,
+                        title       VARCHAR NOT NULL,
+                        description TEXT    DEFAULT '',
+                        assigned_to VARCHAR REFERENCES users(id),
+                        status      VARCHAR DEFAULT 'open',
+                        priority    VARCHAR DEFAULT 'medium',
+                        due_date    DATETIME,
+                        created_at  DATETIME,
+                        updated_at  DATETIME
+                    )
+                """))
+                conn.execute(text(
+                    "INSERT OR IGNORE INTO workflow_tasks_new "
+                    "SELECT id, report_id, title, description, assigned_to, "
+                    "       status, priority, due_date, created_at, updated_at "
+                    "FROM workflow_tasks"
+                ))
+                conn.execute(text("DROP TABLE workflow_tasks"))
+                conn.execute(text("ALTER TABLE workflow_tasks_new RENAME TO workflow_tasks"))
+                conn.execute(text("PRAGMA foreign_keys = ON"))
+                conn.commit()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    _run_migrations()
+    yield
+    # Shutdown: nothing to clean up yet, but this is where it would go
+
 
 app = FastAPI(
     title="Field Service RAG API",
     version="2.0.0",
+    lifespan=lifespan,
 )
 
 # ── CORS ───────────────────────────────────────────────────────────────────────
 # ALLOWED_ORIGINS env var lets you set your Vercel URL in production without
-# changing code. Falls back to localhost for local dev.
-ALLOWED_ORIGINS = os.getenv(
-    "ALLOWED_ORIGINS",
-    "http://localhost:3000",
-).split(",")
+# changing code. Falls back to localhost for local dev ONLY — make sure
+# ALLOWED_ORIGINS is set on Render (or wherever this is deployed), otherwise
+# your deployed frontend will be silently blocked by CORS.
+#
+# Format on Render: a comma-separated list, no spaces, no trailing slashes:
+#   ALLOWED_ORIGINS=https://field-service-rag.vercel.app,https://your-custom-domain.com
+#
+# NEVER set this to "*" — it cannot be combined with allow_credentials=True
+# (browsers will reject the response), and it defeats the purpose of CORS.
+raw_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000")
+ALLOWED_ORIGINS = [origin.strip().rstrip("/") for origin in raw_origins.split(",") if origin.strip()]
 
 app.add_middleware(
     CORSMiddleware,
@@ -50,19 +124,19 @@ app.include_router(groups_router)
 app.include_router(access_router)
 app.include_router(reports_router)
 app.include_router(notifications_router)
-app.include_router(hitl_router) 
-# ── Startup ────────────────────────────────────────────────────────────────────
-@app.on_event("startup")
-async def startup():
-    init_db()   # creates / migrates SQLite tables on first run
+app.include_router(hitl_router)
+app.include_router(tasks_router)
+app.include_router(analytics_router)
 
 # ── Legacy endpoints (unchanged) ───────────────────────────────────────────────
 class QuestionRequest(BaseModel):
     question: str
 
+
 @app.get("/")
 def home():
     return {"message": "Field Service RAG API Running"}
+
 
 @app.post("/ask")
 def ask_question(request: QuestionRequest):
@@ -73,6 +147,7 @@ def ask_question(request: QuestionRequest):
         "answer": answer,
     }
 
+
 @app.post("/process")
 def process_documents():
     from app.ingestion.ingest_documents import ingest_documents
@@ -82,6 +157,7 @@ def process_documents():
         "chunks": chunks,
         "message": "Documents processed successfully",
     }
+
 
 # ── Health check ───────────────────────────────────────────────────────────────
 @app.get("/health")

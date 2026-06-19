@@ -40,6 +40,7 @@ def ask_question_with_citations(
     question: str,
     pipeline: str = "safety",
     history: Optional[List[Dict[str, str]]] = None,
+    allowed_file_ids: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
     Full RAG with inline citations and optional multi-turn memory.
@@ -63,12 +64,11 @@ def ask_question_with_citations(
     """
     # ── Step 1: Choose retrieval strategy ────────────────────────────────────
     if pipeline == "equipment":
-        docs = retrieve_with_hybrid(question, pipeline=pipeline)
+        docs = retrieve_with_hybrid(question, pipeline=pipeline, allowed_file_ids=allowed_file_ids)
     elif pipeline == "field_reports":
-        docs = retrieve_with_parent_expansion(question, pipeline=pipeline)
+        docs = retrieve_with_parent_expansion(question, pipeline=pipeline, allowed_file_ids=allowed_file_ids)
     else:
-        # safety and any future pipelines use standard similarity retrieval
-        retriever = get_retriever(pipeline=pipeline)
+        retriever = get_retriever(pipeline=pipeline, allowed_file_ids=allowed_file_ids)
         docs = retriever.invoke(question)
 
     # ── Step 2: Guard against empty retrieval ────────────────────────────────

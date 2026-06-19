@@ -7,7 +7,7 @@ Uses hybrid BM25 + dense retrieval for high-precision lookup of part numbers,
 torque specs, maintenance schedules, and service procedures.
 
 Renamed from: technical_pipeline.py  (Phase 1)
-"""
+""" 
 
 from app.retrieval.retriever import retrieve_with_hybrid
 from app.retrieval.rag_pipeline import ask_question_with_citations

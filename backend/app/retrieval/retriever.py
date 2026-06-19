@@ -12,16 +12,32 @@ except ImportError:
 _bm25_cache: dict = {}
 
 
-def get_retriever(pipeline: str = "policy"):
+def _file_filter(allowed_file_ids: Optional[List[str]], extra: Optional[dict] = None) -> Optional[dict]:
     """
-    Drop-in replacement for your original get_retriever().
-    Defaults to 'policy' so your existing policy_bot.py keeps working.
-    Now loads from the correct named collection.
+    Builds a ChromaDB `where` filter that restricts results to allowed files.
+    - None → no filter (admin sees everything).
+    - [] → empty list means no files are accessible; callers should short-circuit before this.
+    - extra → merged with $and when both conditions are needed.
     """
+    if allowed_file_ids is None:
+        return extra  # admin: no restriction
+
+    file_clause = {"file_id": {"$in": allowed_file_ids}} if allowed_file_ids else {"file_id": "__no_match__"}
+
+    if extra is None:
+        return file_clause
+    return {"$and": [file_clause, extra]}
+
+
+def get_retriever(pipeline: str = "policy", allowed_file_ids: Optional[List[str]] = None):
     vector_store = get_vector_store(pipeline)
+    search_kwargs: dict = {"k": 6}
+    f = _file_filter(allowed_file_ids)
+    if f:
+        search_kwargs["filter"] = f
     return vector_store.as_retriever(
         search_type="similarity",
-        search_kwargs={"k": 6},
+        search_kwargs=search_kwargs,
     )
 
 
@@ -29,16 +45,14 @@ def retrieve_with_hybrid(
     question: str,
     pipeline: str = "general",
     top_k: int = 6,
+    allowed_file_ids: Optional[List[str]] = None,
 ) -> List[Document]:
-    """
-    Hybrid dense + BM25 retrieval fused with Reciprocal Rank Fusion.
-    Used by the 3 pipeline modules for richer, more accurate results.
-    """
     vector_store = get_vector_store(pipeline)
-    dense_docs = vector_store.similarity_search(question, k=top_k)
+    f = _file_filter(allowed_file_ids)
+    dense_docs = vector_store.similarity_search(question, k=top_k, filter=f)
 
     if _BM25_AVAILABLE:
-        bm25_docs = _bm25_retrieve(question, pipeline, top_k)
+        bm25_docs = _bm25_retrieve(question, pipeline, top_k, allowed_file_ids)
         return _reciprocal_rank_fusion([dense_docs, bm25_docs], top_n=top_k)
 
     return dense_docs
@@ -48,22 +62,16 @@ def retrieve_with_parent_expansion(
     question: str,
     pipeline: str = "general",
     top_k: int = 5,
+    allowed_file_ids: Optional[List[str]] = None,
 ) -> List[Document]:
-    """
-    Parent-child retrieval for the general pipeline.
-    Searches small child chunks, then swaps them for their larger parent.
-    """
     vector_store = get_vector_store(pipeline)
 
-    child_docs = vector_store.similarity_search(
-        question,
-        k=top_k * 2,
-        filter={"chunk_type": "child"},
-    )
+    child_filter = _file_filter(allowed_file_ids, extra={"chunk_type": "child"})
+    child_docs = vector_store.similarity_search(question, k=top_k * 2, filter=child_filter)
 
     if not child_docs:
-        # Fallback for data ingested before parent-child was added
-        return vector_store.similarity_search(question, k=top_k)
+        fallback_filter = _file_filter(allowed_file_ids)
+        return vector_store.similarity_search(question, k=top_k, filter=fallback_filter)
 
     seen_parents = set()
     parent_docs = []
@@ -74,11 +82,11 @@ def retrieve_with_parent_expansion(
             continue
         seen_parents.add(parent_id)
 
-        parents = vector_store.similarity_search(
-            question,
-            k=1,
-            filter={"parent_id": parent_id, "chunk_type": "parent"},
+        parent_filter = _file_filter(
+            allowed_file_ids,
+            extra={"$and": [{"parent_id": parent_id}, {"chunk_type": "parent"}]},
         )
+        parents = vector_store.similarity_search(question, k=1, filter=parent_filter)
         parent_docs.append(parents[0] if parents else child)
 
         if len(parent_docs) >= top_k:
@@ -88,7 +96,6 @@ def retrieve_with_parent_expansion(
 
 
 def invalidate_bm25_cache(pipeline: Optional[str] = None):
-    """Call this after ingesting new documents."""
     if pipeline:
         _bm25_cache.pop(pipeline, None)
     else:
@@ -97,14 +104,33 @@ def invalidate_bm25_cache(pipeline: Optional[str] = None):
 
 # ── BM25 internals ────────────────────────────────────────────────────────────
 
-def _bm25_retrieve(question: str, pipeline: str, top_k: int) -> List[Document]:
+def _bm25_retrieve(
+    question: str,
+    pipeline: str,
+    top_k: int,
+    allowed_file_ids: Optional[List[str]] = None,
+) -> List[Document]:
     if pipeline not in _bm25_cache:
         _rebuild_bm25_index(pipeline)
     bm25, docs = _bm25_cache.get(pipeline, (None, []))
     if not bm25:
         return []
-    scores = bm25.get_scores(question.lower().split())
-    ranked = sorted(zip(scores, docs), key=lambda x: x[0], reverse=True)
+
+    # Apply file-level filter on the BM25 corpus
+    if allowed_file_ids is not None:
+        id_set = set(allowed_file_ids)
+        docs_filtered = [d for d in docs if d.metadata.get("file_id") in id_set]
+        if not docs_filtered:
+            return []
+        tokenized = [d.page_content.lower().split() for d in docs_filtered]
+        from rank_bm25 import BM25Okapi
+        bm25_filtered = BM25Okapi(tokenized)
+        scores = bm25_filtered.get_scores(question.lower().split())
+        ranked = sorted(zip(scores, docs_filtered), key=lambda x: x[0], reverse=True)
+    else:
+        scores = bm25.get_scores(question.lower().split())
+        ranked = sorted(zip(scores, docs), key=lambda x: x[0], reverse=True)
+
     return [doc for _, doc in ranked[:top_k]]
 
 
