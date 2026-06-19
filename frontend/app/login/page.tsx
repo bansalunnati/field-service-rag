@@ -22,8 +22,12 @@ export default function LoginPage() {
       const role = data.role ?? "user";
       setAuth(data.access_token, role);
       router.push(role === "admin" ? "/admin" : "/employee");
-    } catch {
-      setError("Invalid credentials. Please try again.");
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+        ?? (err as { message?: string })?.message
+        ?? "Login failed";
+      setError(msg);
     } finally {
       setLoading(false);
     }
@@ -39,6 +43,9 @@ export default function LoginPage() {
           <h1 className="text-2xl font-bold">Sign In</h1>
           <p className="text-sm text-muted-foreground mt-1">
             Field Service Report Assistant
+          </p>
+          <p className="text-xs text-muted-foreground mt-1 break-all">
+            API: {process.env.NEXT_PUBLIC_API_URL ?? "⚠️ NOT SET (using localhost)"}
           </p>
         </div>
 
