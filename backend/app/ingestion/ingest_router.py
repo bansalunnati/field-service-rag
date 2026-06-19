@@ -28,7 +28,10 @@ from app.retrieval.retriever import invalidate_bm25_cache
 
 router = APIRouter(prefix="/api/ingest", tags=["ingestion"])
 
-ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt", ".csv", ".md"}
+# Image extensions that go through OCR before ingestion
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
+
+ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt", ".csv", ".md"} | IMAGE_EXTENSIONS
 MAX_FILE_MB = int(os.getenv("MAX_UPLOAD_MB", "50"))
 VALID_PIPELINES = {
     "equipment",
@@ -60,11 +63,13 @@ MEDIA_TYPES = {
 }
 
 class IngestResponse(BaseModel):
-    filename:       str
-    pipeline:       str
-    pages:          int
-    chunks_created: int
-    message:        str
+    filename:        str
+    pipeline:        str
+    pages:           int
+    chunks_created:  int
+    message:         str
+    ocr_used:        bool = False
+    ocr_confidence:  float | None = None
 
 
 @router.post("/upload", response_model=IngestResponse)
@@ -98,14 +103,47 @@ async def upload_document(
         tmp_path = tmp.name
 
     permanent_path = None
+    ocr_used = False
+    ocr_confidence = None
+
     # Pre-generate the file ID so it can be stamped on ChromaDB chunks at ingestion time.
     # This enables per-file retrieval filtering for employee access control.
     new_file_id = str(uuid.uuid4())
     try:
+        # ── OCR step (images and scanned PDFs) ────────────────────────────────
+        # For image files: run OCR to extract text, then write it to a .txt temp
+        # file so the normal ingestion pipeline can handle it.
+        # For PDFs with no text layer: same approach — OCR each page first.
+        ingest_path = tmp_path  # default: ingest the original file
+
+        if suffix in IMAGE_EXTENSIONS:
+            # It's an image — always OCR it
+            from app.ingestion.ocr_service import extract_text_from_image
+            ocr_text, ocr_confidence = extract_text_from_image(tmp_path)
+            ocr_used = True
+            # Write extracted text to a temp .txt file for ingestion
+            with tempfile.NamedTemporaryFile(suffix=".txt", delete=False, mode="w", encoding="utf-8") as txt_tmp:
+                txt_tmp.write(ocr_text)
+                ingest_path = txt_tmp.name
+
+        elif suffix == ".pdf":
+            # Check if the PDF is scanned (no text layer)
+            from app.ingestion.ocr_service import is_scanned_pdf, extract_text_from_scanned_pdf
+            if is_scanned_pdf(tmp_path):
+                ocr_text, ocr_confidence = extract_text_from_scanned_pdf(tmp_path)
+                ocr_used = True
+                with tempfile.NamedTemporaryFile(suffix=".txt", delete=False, mode="w", encoding="utf-8") as txt_tmp:
+                    txt_tmp.write(ocr_text)
+                    ingest_path = txt_tmp.name
+
         try:
-            result = ingest_single_file(tmp_path, pipeline=pipeline, file_id=new_file_id)
+            result = ingest_single_file(ingest_path, pipeline=pipeline, file_id=new_file_id)
         except Exception as exc:
             raise HTTPException(status_code=422, detail=f"Ingestion failed: {exc}")
+        finally:
+            # Clean up the OCR temp .txt file if we created one
+            if ingest_path != tmp_path and os.path.exists(ingest_path):
+                os.unlink(ingest_path)
 
         invalidate_bm25_cache(result["pipeline"])
 
@@ -121,6 +159,8 @@ async def upload_document(
                 file_type=suffix.replace(".", ""),
                 pipeline=result["pipeline"],
                 chunk_count=result["chunks"],
+                ocr_used=ocr_used,
+                ocr_confidence=ocr_confidence,
                 uploaded_by=user.user_id,
                 file_path=permanent_path,
             )
@@ -139,6 +179,8 @@ async def upload_document(
         pages=result["pages"],
         chunks_created=result["chunks"],
         message=f"Ingested {result['chunks']} chunks into '{result['pipeline']}' pipeline",
+        ocr_used=ocr_used,
+        ocr_confidence=ocr_confidence,
     )
 
 
@@ -193,6 +235,8 @@ async def list_uploaded_files(
             "pipeline": file.pipeline,
             "chunk_count": file.chunk_count,
             "is_active": file.is_active if file.is_active is not None else True,
+            "ocr_used": bool(file.ocr_used),
+            "ocr_confidence": file.ocr_confidence,
             "uploaded_by": file.uploaded_by,
             "uploaded_at": file.uploaded_at,
             "viewable": bool(file.file_path),

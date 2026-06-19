@@ -147,12 +147,24 @@ def _fallback_to_hitl(db: Session, report_id: str, reason: str) -> None:
 
 def _extract_text(file_path: str) -> str:
     ext = os.path.splitext(file_path)[1].lower()
+
+    # Handle OCR side-car files produced by the submit endpoint
+    if file_path.endswith(".ocr.txt"):
+        ext = ".txt"
+
     loader_map = {
         ".pdf":  _load_pdf,
         ".docx": _load_docx,
         ".txt":  _load_txt,
         ".md":   _load_txt,
     }
+
+    # Images — run OCR directly (fallback if router didn't pre-process)
+    if ext in {".png", ".jpg", ".jpeg"}:
+        from app.ingestion.ocr_service import extract_text_from_image
+        text, _ = extract_text_from_image(file_path)
+        return text
+
     loader = loader_map.get(ext)
     if not loader:
         return ""

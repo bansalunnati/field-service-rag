@@ -10,8 +10,9 @@ backend/.env
 # Chroma database
 backend/chroma_db/
 
-# Uploaded documents
-backend/data/policies/
+# Uploaded documents & submitted reports (runtime data, not source)
+backend/data/
+backend/*.db
 
 # Next.js
 frontend/node_modules/

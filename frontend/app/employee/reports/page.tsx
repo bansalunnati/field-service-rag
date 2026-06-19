@@ -101,15 +101,18 @@ export default function EmployeeReportsPage() {
               </div>
               <div>
                 <label className="text-xs text-muted-foreground block mb-1">
-                  Attach Report File (PDF, DOCX, TXT)
+                  Attach Report File (PDF, DOCX, TXT, PNG, JPG)
                   <span className="ml-1 rounded bg-primary/10 text-primary px-1.5 py-0.5 text-[10px] font-medium">
                     field_reports pipeline
+                  </span>
+                  <span className="ml-1 rounded bg-amber-100 text-amber-700 px-1.5 py-0.5 text-[10px] font-medium">
+                    images OCR&apos;d automatically
                   </span>
                 </label>
                 <input
                   ref={fileRef}
                   type="file"
-                  accept=".pdf,.docx,.txt"
+                  accept=".pdf,.docx,.txt,.png,.jpg,.jpeg"
                   className="text-sm"
                 />
               </div>
@@ -160,7 +163,14 @@ export default function EmployeeReportsPage() {
                   className="flex items-center justify-between rounded-lg border px-4 py-3"
                 >
                   <div>
-                    <p className="text-sm font-medium">{r.title}</p>
+                    <p className="text-sm font-medium flex items-center gap-2">
+                      {r.title}
+                      {r.ocr_used && (
+                        <span className="rounded-full bg-amber-100 text-amber-700 px-2 py-0.5 text-[10px] font-medium">
+                          OCR
+                        </span>
+                      )}
+                    </p>
                     <p className="text-xs text-muted-foreground">
                       {r.report_type} ·{" "}
                       {r.submitted_at

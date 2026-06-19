@@ -35,10 +35,11 @@ def _run_migrations():
     # PostgreSQL: ADD COLUMN IF NOT EXISTS is atomic — safe to run every startup.
     # SQLite: no IF NOT EXISTS support, so catch the duplicate-column exception.
     for col, definition in [
-        ("ocr_used",      "BOOLEAN DEFAULT FALSE"),
-        ("is_active",     "BOOLEAN DEFAULT TRUE"),
-        ("file_path",     "VARCHAR"),
-        ("original_name", "VARCHAR"),
+        ("ocr_used",       "BOOLEAN DEFAULT FALSE"),
+        ("ocr_confidence", "FLOAT"),
+        ("is_active",      "BOOLEAN DEFAULT TRUE"),
+        ("file_path",      "VARCHAR"),
+        ("original_name",  "VARCHAR"),
     ]:
         try:
             with engine.connect() as conn:

@@ -15,6 +15,8 @@ interface UploadedFile {
   file_type: string;
   uploaded_at: string;
   is_active?: boolean;
+  ocr_used?: boolean;
+  ocr_confidence?: number | null;
 }
 
 const PIPELINES = ["equipment", "safety", "field_reports"];
@@ -106,12 +108,12 @@ export default function DocumentsPage() {
             </div>
             <div>
               <label className="text-xs text-muted-foreground block mb-1">
-                File (PDF, DOCX, TXT, CSV, MD)
+                File (PDF, DOCX, TXT, CSV, MD, PNG, JPG)
               </label>
               <input
                 ref={fileRef}
                 type="file"
-                accept=".pdf,.docx,.txt,.csv,.md"
+                accept=".pdf,.docx,.txt,.csv,.md,.png,.jpg,.jpeg"
                 className="text-sm"
               />
             </div>
@@ -151,6 +153,7 @@ export default function DocumentsPage() {
                     <th className="pb-2 font-medium">Pipeline</th>
                     <th className="pb-2 font-medium">Chunks</th>
                     <th className="pb-2 font-medium">Type</th>
+                    <th className="pb-2 font-medium">OCR</th>
                     <th className="pb-2 font-medium">Uploaded</th>
                     <th className="pb-2 font-medium">Active</th>
                     <th className="pb-2 font-medium"></th>
@@ -171,6 +174,15 @@ export default function DocumentsPage() {
                       <td className="py-2">{f.chunk_count}</td>
                       <td className="py-2 uppercase text-xs text-muted-foreground">
                         {f.file_type}
+                      </td>
+                      <td className="py-2">
+                        {f.ocr_used ? (
+                          <span className="rounded-full bg-amber-100 text-amber-700 px-2 py-0.5 text-xs font-medium whitespace-nowrap">
+                            OCR {f.ocr_confidence != null ? `${f.ocr_confidence}%` : ""}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        )}
                       </td>
                       <td className="py-2 text-muted-foreground">
                         {new Date(f.uploaded_at).toLocaleDateString()}

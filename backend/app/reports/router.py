@@ -27,7 +27,8 @@ from app.chat.models import FieldReport, HITLReview, Notification, User
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
 REPORTS_DIR = os.getenv("REPORTS_DIR", "data/submitted_reports")
-ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt", ".md"}
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
+ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt", ".md"} | IMAGE_EXTENSIONS
 os.makedirs(REPORTS_DIR, exist_ok=True)
 
 def _notify_admins_new_report(db: Session, report: FieldReport, submitter_email: str):
@@ -91,6 +92,31 @@ async def submit_report(
     with open(file_path, "wb") as f:
         f.write(contents)
 
+    # If the uploaded file is an image or a scanned PDF (no text layer), run OCR
+    # and save the extracted text as a .txt file alongside the original.
+    # The reviewer will use this text file instead of trying to read the image directly.
+    review_path = file_path   # default: reviewer reads the original file
+    ocr_used = False
+
+    if suffix in IMAGE_EXTENSIONS:
+        from app.ingestion.ocr_service import extract_text_from_image
+        ocr_text, _ = extract_text_from_image(file_path)
+        ocr_used = True
+        txt_path = file_path + ".ocr.txt"
+        with open(txt_path, "w", encoding="utf-8") as f:
+            f.write(ocr_text)
+        review_path = txt_path
+
+    elif suffix == ".pdf":
+        from app.ingestion.ocr_service import is_scanned_pdf, extract_text_from_scanned_pdf
+        if is_scanned_pdf(file_path):
+            ocr_text, _ = extract_text_from_scanned_pdf(file_path)
+            ocr_used = True
+            txt_path = file_path + ".ocr.txt"
+            with open(txt_path, "w", encoding="utf-8") as f:
+                f.write(ocr_text)
+            review_path = txt_path
+
     # Write FieldReport record
     report = FieldReport(
         id=report_id,
@@ -102,14 +128,15 @@ async def submit_report(
             "report_type": report_type,
             "original_filename": file.filename,
             "file_path": file_path,
+            "ocr_used": ocr_used,
         },
     )
     db.add(report)
     db.commit()
     db.refresh(report)
     _notify_admins_new_report(db, report, submitter_email=user.email if hasattr(user, "email") else user.user_id)
-    # Fire agentic review — non-blocking
-    background_tasks.add_task(run_agentic_review, report_id, file_path, report_type)
+    # Fire agentic review — non-blocking, passes the OCR'd text path if applicable
+    background_tasks.add_task(run_agentic_review, report_id, review_path, report_type)
 
     return {
         "report_id": report_id,
@@ -226,6 +253,7 @@ def _serialize(report: FieldReport, include_submitter: bool = False) -> dict:
         "updated_at":   str(report.updated_at),
         "ai_summary":   (report.metadata_json or {}).get("ai_summary", ""),
         "hitl_reason":  (report.metadata_json or {}).get("hitl_reason", ""),
+        "ocr_used":     bool((report.metadata_json or {}).get("ocr_used", False)),
     }
     if include_submitter and report.submitted_by_user:
         out["submitted_by"] = report.submitted_by_user.email

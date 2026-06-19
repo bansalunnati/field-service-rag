@@ -21,7 +21,7 @@ NEW (Phase 2):
 
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, Text, DateTime, ForeignKey, JSON, Boolean, Integer
+from sqlalchemy import Column, String, Text, DateTime, ForeignKey, JSON, Boolean, Integer, Float
 from sqlalchemy.orm import relationship
 from app.chat.database import Base
 
@@ -179,8 +179,9 @@ class UploadedFile(Base):
     file_type     = Column(String, nullable=False)
     pipeline      = Column(String, nullable=False)
     chunk_count   = Column(Integer, default=0)
-    ocr_used      = Column(Boolean, default=False)
-    is_active     = Column(Boolean, default=True)
+    ocr_used       = Column(Boolean, default=False)
+    ocr_confidence = Column(Float, nullable=True)   # average OCR confidence 0–100
+    is_active      = Column(Boolean, default=True)
     file_path     = Column(String, nullable=True)   # original file on disk, for in-browser viewing only
     uploaded_by   = Column(String, ForeignKey("users.id"), nullable=False, index=True)
     uploaded_at   = Column(DateTime, default=datetime.utcnow)
