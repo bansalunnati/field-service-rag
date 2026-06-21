@@ -1,5 +1,5 @@
 from langchain_core.documents import Document
-from app.ingestion.vector_store import get_vector_store
+from app.ingestion.vector_store import get_vector_store, get_all_documents
 from typing import List, Optional
 
 try:
@@ -136,11 +136,7 @@ def _bm25_retrieve(
 
 def _rebuild_bm25_index(pipeline: str):
     try:
-        vs = get_vector_store(pipeline)
-        result = vs._collection.get(include=["documents", "metadatas"])
-        raw_docs = result.get("documents", [])
-        metas = result.get("metadatas", []) or [{}] * len(raw_docs)
-        docs = [Document(page_content=t, metadata=m) for t, m in zip(raw_docs, metas)]
+        docs = get_all_documents(pipeline)
         tokenized = [d.page_content.lower().split() for d in docs]
         _bm25_cache[pipeline] = (BM25Okapi(tokenized) if tokenized else None, docs)
     except Exception as e:

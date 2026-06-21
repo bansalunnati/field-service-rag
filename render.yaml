@@ -3,10 +3,18 @@ services:
     name: field-service-rag-api
     runtime: docker
     region: oregon
-    plan: free
+    plan: starter
     dockerfilePath: ./backend/Dockerfile
     dockerContext: ./backend
     healthCheckPath: /health
+    # Persistent disk for uploaded/submitted files (UPLOADS_DIR, REPORTS_DIR
+    # below both live under data/, which this mounts) — survives restarts,
+    # redeploys, and instance changes. Render Disks require a paid plan,
+    # hence "starter" above instead of "free".
+    disk:
+      name: field-service-rag-data
+      mountPath: /app/data
+      sizeGB: 1
     envVars:
       # ── Azure OpenAI ──────────────────────────────────────────────────────────
       - key: AZURE_OPENAI_API_KEY
@@ -37,6 +45,10 @@ services:
         value: data/uploaded_files
       - key: REPORTS_DIR
         value: data/submitted_reports
+      # ── Vector store — pgvector in the same Postgres DB above, NOT local   ──
+      # ── disk, so embeddings survive container restarts/redeploys/scaling.   ──
+      - key: VECTOR_STORE
+        value: pgvector
 
 databases:
   - name: field-service-rag-db

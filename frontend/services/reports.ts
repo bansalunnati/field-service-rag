@@ -28,3 +28,11 @@ export const reviewReport = async (
   });
   return res.data;
 };
+
+export const previewReport = async (reportId: string) => {
+  const res = await api.get(`/api/reports/${reportId}/view`, {
+    responseType: "blob",
+  });
+  const url = URL.createObjectURL(res.data);
+  window.open(url, "_blank", "noopener,noreferrer");
+};

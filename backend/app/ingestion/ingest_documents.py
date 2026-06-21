@@ -117,6 +117,10 @@ def ingest_single_file(file_path: str, pipeline: Optional[str] = None, file_id: 
             doc.metadata["file_id"] = file_id
 
     chunks = split_documents(docs, pipeline=detected_pipeline)
+    if not chunks:
+        raise ValueError(
+            "No extractable text content found in this file — nothing to ingest."
+        )
     # Propagate file_id onto every chunk (split_documents copies metadata)
     if file_id:
         for chunk in chunks:

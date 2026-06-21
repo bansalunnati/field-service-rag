@@ -127,6 +127,13 @@ async def upload_document(
                     detail=f"OCR failed for image '{file.filename}': {exc}. "
                            "Ensure Tesseract is installed on the server (apt-get install -y tesseract-ocr).",
                 )
+            if not ocr_text.strip():
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"OCR could not find any readable text in '{file.filename}'. "
+                           "Try a sharper, well-lit, higher-resolution photo with the text "
+                           "facing the camera squarely.",
+                )
             ocr_used = True
             # Write extracted text to a temp .txt file for ingestion
             with tempfile.NamedTemporaryFile(suffix=".txt", delete=False, mode="w", encoding="utf-8") as txt_tmp:
@@ -139,6 +146,12 @@ async def upload_document(
                 from app.ingestion.ocr_service import is_scanned_pdf, extract_text_from_scanned_pdf
                 if is_scanned_pdf(tmp_path):
                     ocr_text, ocr_confidence = extract_text_from_scanned_pdf(tmp_path)
+                    if not ocr_text.strip():
+                        raise HTTPException(
+                            status_code=422,
+                            detail=f"OCR could not find any readable text in '{file.filename}'. "
+                                   "Try a clearer scan or a higher-resolution photo.",
+                        )
                     ocr_used = True
                     with tempfile.NamedTemporaryFile(suffix=".txt", delete=False, mode="w", encoding="utf-8") as txt_tmp:
                         txt_tmp.write(ocr_text)
@@ -202,10 +215,8 @@ async def upload_document(
 
 @router.get("/collections")
 async def list_collections(user: TokenData = Depends(require_permission("upload"))):
-    from app.ingestion.vector_store import CHROMA_BASE_DIR
-    import chromadb
-    client = chromadb.PersistentClient(path=CHROMA_BASE_DIR)
-    return {"collections": [c.name for c in client.list_collections()]}
+    from app.ingestion.vector_store import list_collection_names
+    return {"collections": list_collection_names()}
 
 def _visible_file_ids_for_employee(db: Session, user_id: str) -> set:
     """File IDs explicitly granted to any group this user belongs to."""

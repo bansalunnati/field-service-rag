@@ -3,13 +3,26 @@
 import { useEffect, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { getHitlQueue, approveReport, rejectReport } from "@/services/hitl";
-import { CheckCircle, XCircle, Loader2 } from "lucide-react";
+import { previewReport } from "@/services/reports";
+import { CheckCircle, XCircle, Loader2, Eye } from "lucide-react";
 
 export default function HitlPage() {
   const [queue, setQueue] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [processing, setProcessing] = useState<string | null>(null);
+  const [previewingId, setPreviewingId] = useState<string | null>(null);
+
+  const handlePreview = async (reportId: string) => {
+    setPreviewingId(reportId);
+    try {
+      await previewReport(reportId);
+    } catch {
+      alert("Preview failed. The file may no longer be available.");
+    } finally {
+      setPreviewingId(null);
+    }
+  };
 
   const load = async () => {
     try {
@@ -84,6 +97,18 @@ export default function HitlPage() {
                   </div>
 
                   <div className="mt-4 flex flex-wrap items-center gap-3">
+                    <button
+                      onClick={() => handlePreview(reportId)}
+                      disabled={previewingId === reportId}
+                      className="flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm hover:bg-muted/40 disabled:opacity-50"
+                    >
+                      {previewingId === reportId ? (
+                        <Loader2 size={14} className="animate-spin" />
+                      ) : (
+                        <Eye size={14} />
+                      )}
+                      Preview
+                    </button>
                     <input
                       className="flex-1 min-w-40 rounded border px-3 py-1.5 text-sm bg-background"
                       placeholder="Reviewer notes (optional)"

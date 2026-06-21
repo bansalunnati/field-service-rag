@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.auth.auth_service import TokenData, get_current_user
@@ -30,6 +31,16 @@ REPORTS_DIR = os.getenv("REPORTS_DIR", "data/submitted_reports")
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
 ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt", ".md"} | IMAGE_EXTENSIONS
 os.makedirs(REPORTS_DIR, exist_ok=True)
+
+MEDIA_TYPES = {
+    "pdf":  "application/pdf",
+    "txt":  "text/plain",
+    "md":   "text/markdown",
+    "png":  "image/png",
+    "jpg":  "image/jpeg",
+    "jpeg": "image/jpeg",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+}
 
 def _notify_admins_new_report(db: Session, report: FieldReport, submitter_email: str):
     """Notifies every admin that a new report has been submitted and needs eventual review."""
@@ -143,6 +154,45 @@ async def submit_report(
         "status":    "under_review",
         "message":   "Report received. AI review has started. You'll be notified of the result.",
     }
+
+
+# ── Preview submitted file ────────────────────────────────────────────────────
+
+@router.get("/{report_id}/view")
+async def view_report_file(
+    report_id: str,
+    db:   Session   = Depends(get_db),
+    user: TokenData  = Depends(require_employee),
+):
+    """
+    Streams the originally submitted report file inline for in-browser preview.
+    The submitting employee and any admin can view it; other employees cannot.
+    """
+    report = db.query(FieldReport).filter(FieldReport.id == report_id).first()
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found")
+
+    if user.role != "admin" and report.submitted_by != user.user_id:
+        raise HTTPException(status_code=403, detail="You do not have access to this report")
+
+    meta = report.metadata_json or {}
+    file_path = meta.get("file_path")
+    if not file_path or not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Report file is no longer available")
+
+    suffix = Path(file_path).suffix.lstrip(".").lower()
+    media_type = MEDIA_TYPES.get(suffix, "application/octet-stream")
+    original_name = meta.get("original_filename", os.path.basename(file_path))
+
+    def _stream():
+        with open(file_path, "rb") as f:
+            yield from f
+
+    return StreamingResponse(
+        _stream(),
+        media_type=media_type,
+        headers={"Content-Disposition": f'inline; filename="{original_name}"'},
+    )
 
 
 # ── Employee: view own submissions ────────────────────────────────────────────

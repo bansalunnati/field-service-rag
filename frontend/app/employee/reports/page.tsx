@@ -2,8 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
-import { submitReport, getMyReports } from "@/services/reports";
-import { Upload, Loader2 } from "lucide-react";
+import { submitReport, getMyReports, previewReport } from "@/services/reports";
+import { Upload, Loader2, Eye } from "lucide-react";
 
 const STATUS_STYLES: Record<string, string> = {
   pending: "bg-amber-100 text-amber-700",
@@ -28,6 +28,18 @@ export default function EmployeeReportsPage() {
   const [reportType, setReportType] = useState("other");
   const [submitResult, setSubmitResult] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const [previewingId, setPreviewingId] = useState<string | null>(null);
+
+  const handlePreview = async (id: string) => {
+    setPreviewingId(id);
+    try {
+      await previewReport(id);
+    } catch {
+      alert("Preview failed. The file may no longer be available.");
+    } finally {
+      setPreviewingId(null);
+    }
+  };
 
   const load = async () => {
     try {
@@ -178,13 +190,28 @@ export default function EmployeeReportsPage() {
                         : ""}
                     </p>
                   </div>
-                  <span
-                    className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                      STATUS_STYLES[r.status] ?? "bg-muted"
-                    }`}
-                  >
-                    {r.status.replace("_", " ")}
-                  </span>
+                  <div className="flex items-center gap-3">
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                        STATUS_STYLES[r.status] ?? "bg-muted"
+                      }`}
+                    >
+                      {r.status.replace("_", " ")}
+                    </span>
+                    <button
+                      onClick={() => handlePreview(r.id)}
+                      disabled={previewingId === r.id}
+                      title="Preview submitted file"
+                      className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition disabled:opacity-50"
+                    >
+                      {previewingId === r.id ? (
+                        <Loader2 size={14} className="animate-spin" />
+                      ) : (
+                        <Eye size={14} />
+                      )}
+                      Preview
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
