@@ -3,18 +3,14 @@ services:
     name: field-service-rag-api
     runtime: docker
     region: oregon
-    plan: starter
+    plan: free
     dockerfilePath: ./backend/Dockerfile
     dockerContext: ./backend
     healthCheckPath: /health
-    # Persistent disk for uploaded/submitted files (UPLOADS_DIR, REPORTS_DIR
-    # below both live under data/, which this mounts) — survives restarts,
-    # redeploys, and instance changes. Render Disks require a paid plan,
-    # hence "starter" above instead of "free".
-    disk:
-      name: field-service-rag-data
-      mountPath: /app/data
-      sizeGB: 1
+    # NOTE: uploaded files (UPLOADS_DIR) and submitted reports (REPORTS_DIR)
+    # do NOT persist across restarts/redeploys on the free plan — Render
+    # Disks require a paid plan. Upgrade to "starter" + add a `disk:` block
+    # mounted at /app/data if/when that's worth the ~$7/mo.
     envVars:
       # ── Azure OpenAI ──────────────────────────────────────────────────────────
       - key: AZURE_OPENAI_API_KEY
