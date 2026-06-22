@@ -12,6 +12,7 @@ import {
   Bell,
   BarChart2,
   FileLock2,
+  ClipboardList,
 } from "lucide-react";
 
 const menuItems = [
@@ -21,6 +22,7 @@ const menuItems = [
   { name: "Documents",    href: "/admin/documents",    icon: FolderOpen },
   { name: "Assign Files", href: "/admin/assign-files", icon: FileLock2 },
   { name: "Groups",       href: "/admin/groups",       icon: Users },
+  { name: "Reports",      href: "/admin/reports",      icon: ClipboardList },
   { name: "HITL Review",  href: "/admin/hitl",         icon: ShieldCheck },
   { name: "Tasks",        href: "/admin/tasks",        icon: CheckSquare },
   { name: "Notifications",href: "/admin/notifications",icon: Bell },
