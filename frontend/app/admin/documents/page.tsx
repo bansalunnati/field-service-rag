@@ -202,12 +202,17 @@ export default function DocumentsPage() {
                             <Loader2 size={12} className="animate-spin" /> Processing…
                           </span>
                         ) : f.status === "failed" ? (
-                          <span
-                            className="text-xs text-destructive cursor-help"
-                            title={f.error_message ?? "OCR failed"}
+                          <button
+                            onClick={() =>
+                              notify(f.error_message ?? "OCR failed for an unknown reason.", {
+                                title: `Processing failed: ${f.original_name}`,
+                                destructive: true,
+                              })
+                            }
+                            className="text-xs text-destructive underline underline-offset-2 hover:opacity-80"
                           >
-                            Failed
-                          </span>
+                            Failed — view reason
+                          </button>
                         ) : (
                           f.chunk_count
                         )}
