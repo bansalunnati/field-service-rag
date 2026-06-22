@@ -30,8 +30,15 @@ def init_db():
     """Create all tables. Called once at FastAPI startup."""
     from app.chat import models  # noqa — registers models with Base
     Base.metadata.create_all(bind=engine)
-    _migrate_query_log_fk()
-    _migrate_uploaded_files_status()
+
+    # Each migration is independently best-effort: a stuck lock or transient
+    # DB error here should never prevent the app from starting and binding
+    # its port — that turns a 5-second DDL hiccup into a full deploy timeout.
+    for migration in (_migrate_query_log_fk, _migrate_uploaded_files_status):
+        try:
+            migration()
+        except Exception as exc:
+            print(f"Startup migration {migration.__name__} failed (non-fatal): {exc}")
 
 
 def _migrate_query_log_fk():
@@ -46,6 +53,11 @@ def _migrate_query_log_fk():
         return
     from sqlalchemy import text
     with engine.begin() as conn:
+        # If another connection (e.g. a previous deploy's lingering worker)
+        # holds a lock on this table, fail fast after a few seconds instead
+        # of hanging the whole startup — and therefore the whole deploy —
+        # indefinitely.
+        conn.execute(text("SET lock_timeout = '5s'"))
         conn.execute(text("""
             DO $$
             DECLARE
@@ -81,6 +93,7 @@ def _migrate_uploaded_files_status():
         return
     from sqlalchemy import text
     with engine.begin() as conn:
+        conn.execute(text("SET lock_timeout = '5s'"))
         conn.execute(text(
             "ALTER TABLE uploaded_files ADD COLUMN IF NOT EXISTS status VARCHAR DEFAULT 'ready'"
         ))
