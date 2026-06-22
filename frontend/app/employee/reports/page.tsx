@@ -191,6 +191,16 @@ export default function EmployeeReportsPage() {
                         ? new Date(r.submitted_at).toLocaleDateString()
                         : ""}
                     </p>
+                    {r.ai_summary && (
+                      <p className="text-xs text-muted-foreground mt-1 italic">
+                        &ldquo;{r.ai_summary}&rdquo;
+                      </p>
+                    )}
+                    {r.matched_sources?.length > 0 && (
+                      <p className="text-[11px] text-muted-foreground mt-0.5">
+                        Checked against: {r.matched_sources.join(", ")}
+                      </p>
+                    )}
                   </div>
                   <div className="flex items-center gap-3">
                     <span

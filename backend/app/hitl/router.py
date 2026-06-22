@@ -51,7 +51,8 @@ async def get_hitl_queue(
                 "report_id": report.id,
                 "title": report.title,
                 "status": report.status,
-                "submitted_at": report.submitted_at
+                "submitted_at": report.submitted_at,
+                "hitl_reason": (report.metadata_json or {}).get("hitl_reason", ""),
             })
 
     return results

@@ -96,6 +96,11 @@ export default function HitlPage() {
                         ? new Date(item.submitted_at).toLocaleDateString()
                         : ""}
                     </p>
+                    {item.hitl_reason && (
+                      <p className="text-xs text-amber-700 mt-1.5 bg-amber-50 rounded px-2 py-1">
+                        Escalated: {item.hitl_reason}
+                      </p>
+                    )}
                   </div>
 
                   <div className="mt-4 flex flex-wrap items-center gap-3">

@@ -20,9 +20,18 @@ from sqlalchemy.orm import Session
 
 from app.chat.database import SessionLocal
 from app.chat.models import FieldReport, HITLReview, Notification, User
-from app.retrieval.retriever import retrieve_with_parent_expansion
+from app.retrieval.retriever import retrieve_with_parent_expansion, retrieve_with_hybrid, get_retriever
 from app.llm.llm_config import llm
 from app.ingestion.document_loader import _load_pdf, _load_docx, _load_txt
+
+# Templates/checklists/SOPs an admin uploads can live in any pipeline —
+# e.g. "Hazardous Materials Field Inspection Checklist.pdf" or "SOP telecom
+# towers.pdf" are typically filed under "safety" or "equipment", not
+# "field_reports". Searching only field_reports meant the reviewer often
+# found no real template, then fell through to whatever the LLM already
+# "knew" generically about inspection reports instead of the admin's
+# actual document — which is the bug being fixed here.
+ALL_PIPELINES = ["field_reports", "safety", "equipment"]
 
 
 def run_agentic_review(report_id: str, file_path: str, report_type: str) -> None:
@@ -53,20 +62,27 @@ def _review(db: Session, report_id: str, file_path: str, report_type: str) -> No
         _fallback_to_hitl(db, report_id, reason="Could not extract text from the uploaded file.")
         return
 
-    # Step 2 — Retrieve the relevant template/SOP from RAG
-    template_docs = retrieve_with_parent_expansion(
-        question=f"{report_type} inspection report template required fields checklist",
-        pipeline="field_reports",
-        top_k=4,
-    )
+    # Step 2 — Retrieve the relevant template/SOP from across every pipeline,
+    # not just field_reports — admins file checklists/SOPs under whichever
+    # pipeline fits the document, so the search has to follow.
+    query = f"{report_type} {report.title} inspection report template required fields checklist"
+    template_docs = _retrieve_templates(query)
 
     if not template_docs:
-        # No template found — can't auto-review, escalate immediately
+        # No template found — can't auto-review, escalate immediately rather
+        # than letting the LLM invent generic pass/fail criteria with nothing
+        # to ground them in.
         _fallback_to_hitl(
             db, report_id,
-            reason="No matching template or SOP found in the document store for this report type."
+            reason=(
+                f"No matching template, SOP, or checklist for report type "
+                f"'{report_type}' was found in the documents uploaded by the "
+                f"admin. Upload the relevant reference document, or review manually."
+            ),
         )
         return
+
+    matched_sources = sorted({d.metadata.get("source", "unknown") for d in template_docs})
 
     template_text = "\n\n".join(
         f"[Template Source: {d.metadata.get('source', 'unknown')}]\n{d.page_content}"
@@ -76,14 +92,24 @@ def _review(db: Session, report_id: str, file_path: str, report_type: str) -> No
     # Step 3 — Build evaluation prompt and call LLM
     prompt = f"""You are a compliance reviewer for a field operations team.
 
-An employee has submitted a completed field inspection report.
-Your job is to evaluate it against the official template and SOPs retrieved below.
+An employee has submitted a completed field inspection report. Your job is
+to evaluate it STRICTLY against the official template/SOP reference text
+retrieved below — these are real documents the admin uploaded.
 
-EVALUATION CRITERIA:
-1. All mandatory fields and sections present in the template must be filled in the submission.
+GROUNDING RULE (most important):
+- Base your verdict ONLY on the OFFICIAL TEMPLATE / SOP REFERENCE text below.
+- Do NOT fall back on generic knowledge of what an inspection report
+  "should" contain. If the reference text doesn't actually specify a
+  requirement, you cannot fail the submission for missing it.
+- If the reference text is too thin, unrelated to this report type, or
+  otherwise insufficient to judge the submission against, you MUST return
+  "needs_hitl" and say so in the summary — do not guess.
+
+EVALUATION CRITERIA (apply only using the reference text above as the source of truth):
+1. Every mandatory field or section named in the reference must be present in the submission.
 2. Observations, readings, or checklist items must be recorded (not left blank or marked N/A without justification).
 3. No obvious internal inconsistencies (e.g. date mismatch, site ID mismatch, contradictory readings).
-4. Signature or technician ID must be present.
+4. Signature or technician ID must be present, if the reference requires one.
 
 OFFICIAL TEMPLATE / SOP REFERENCE:
 {template_text}
@@ -95,14 +121,14 @@ Respond ONLY with a JSON object in this exact structure — no prose before or a
 {{
   "verdict": "passed" | "failed" | "needs_hitl",
   "confidence": "high" | "medium" | "low",
-  "summary": "One sentence summary of the decision.",
+  "summary": "One sentence summary of the decision, grounded in the reference text.",
   "issues": ["Issue 1", "Issue 2"]
 }}
 
 Rules for verdict:
-- "passed": Report is complete, consistent, and meets all template requirements.
-- "failed": Report has clear, specific gaps or errors that make it non-compliant.
-- "needs_hitl": You are uncertain due to poor scan quality, ambiguous fields, or conflicting information.
+- "passed": Report is complete, consistent, and meets every requirement actually stated in the reference.
+- "failed": Report has clear, specific gaps or errors against the reference that make it non-compliant.
+- "needs_hitl": You are uncertain due to poor scan quality, ambiguous fields, conflicting information, or an insufficient/irrelevant reference.
 """
 
     raw = llm.invoke(prompt).content.strip()
@@ -110,12 +136,12 @@ Rules for verdict:
 
     # Step 4 — Apply verdict
     if verdict == "passed":
-        _set_status(db, report, "approved", summary)
+        _set_status(db, report, "approved", summary, matched_sources)
         _notify_employee(db, report, "approved", summary)
         _notify_admins(db, report, "approved", summary)
 
     elif verdict == "failed":
-        _set_status(db, report, "rejected", summary)
+        _set_status(db, report, "rejected", summary, matched_sources)
         _notify_employee(db, report, "rejected", summary)
         _notify_admins(db, report, "rejected", summary)
 
@@ -144,6 +170,28 @@ def _fallback_to_hitl(db: Session, report_id: str, reason: str) -> None:
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _retrieve_templates(query: str, per_pipeline_k: int = 3) -> list:
+    """
+    Searches every pipeline for the admin-uploaded template/SOP/checklist
+    relevant to this report, instead of only field_reports. Each pipeline
+    uses the same retrieval strategy the chat assistant uses for it, so
+    results are consistent with what a human would find via Policy Chat.
+    """
+    docs = []
+    for pipeline in ALL_PIPELINES:
+        try:
+            if pipeline == "equipment":
+                pipeline_docs = retrieve_with_hybrid(query, pipeline=pipeline, top_k=per_pipeline_k)
+            elif pipeline == "field_reports":
+                pipeline_docs = retrieve_with_parent_expansion(query, pipeline=pipeline, top_k=per_pipeline_k)
+            else:
+                pipeline_docs = get_retriever(pipeline=pipeline).invoke(query)[:per_pipeline_k]
+        except Exception:
+            pipeline_docs = []
+        docs.extend(pipeline_docs)
+    return docs
+
 
 def _extract_text(file_path: str) -> str:
     ext = os.path.splitext(file_path)[1].lower()
@@ -189,9 +237,13 @@ def _parse_verdict(raw: str) -> tuple:
         return "needs_hitl", "low", "Could not parse AI review response.", []
 
 
-def _set_status(db: Session, report: FieldReport, status: str, summary: str) -> None:
+def _set_status(db: Session, report: FieldReport, status: str, summary: str, matched_sources: list = None) -> None:
     report.status = status
-    report.metadata_json = {**(report.metadata_json or {}), "ai_summary": summary}
+    report.metadata_json = {
+        **(report.metadata_json or {}),
+        "ai_summary": summary,
+        "matched_sources": matched_sources or [],
+    }
     report.updated_at = datetime.utcnow()
     db.commit()
 

@@ -304,6 +304,7 @@ def _serialize(report: FieldReport, include_submitter: bool = False) -> dict:
         "ai_summary":   (report.metadata_json or {}).get("ai_summary", ""),
         "hitl_reason":  (report.metadata_json or {}).get("hitl_reason", ""),
         "ocr_used":     bool((report.metadata_json or {}).get("ocr_used", False)),
+        "matched_sources": (report.metadata_json or {}).get("matched_sources", []),
     }
     if include_submitter and report.submitted_by_user:
         out["submitted_by"] = report.submitted_by_user.email
