@@ -12,6 +12,7 @@ import {
 } from "@/services/groups";
 import api from "@/lib/api";
 import { Loader2, Trash2, Plus, UserMinus, UserPlus } from "lucide-react";
+import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 
 const PIPELINES = ["equipment", "safety", "field_reports"];
 
@@ -25,6 +26,7 @@ export default function GroupsPage() {
   const [addEmail, setAddEmail] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const { confirm, notify } = useConfirmDialog();
 
   const load = async () => {
     try {
@@ -56,7 +58,10 @@ export default function GroupsPage() {
           await addMember(group.id, initialMember.trim());
         } catch {
           // group created, member add failed — surface below
-          alert(`Group created but could not add member: user '${initialMember}' not found.`);
+          await notify(`Group created but could not add member: user '${initialMember}' not found.`, {
+            title: "Member not added",
+            destructive: true,
+          });
         }
       }
       setName("");
@@ -69,7 +74,8 @@ export default function GroupsPage() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm("Delete group?")) return;
+    const ok = await confirm("Delete group?", { title: "Delete group", confirmLabel: "Delete", destructive: true });
+    if (!ok) return;
     await deleteGroup(id);
     if (selectedGroup?.id === id) setSelectedGroup(null);
     await load();
@@ -87,7 +93,7 @@ export default function GroupsPage() {
       setAddEmail("");
       await loadGroup(selectedGroup.id);
     } catch {
-      alert("User not found or already a member.");
+      await notify("User not found or already a member.", { destructive: true });
     }
   };
 

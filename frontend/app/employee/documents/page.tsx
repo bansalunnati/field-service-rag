@@ -5,6 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { getFiles } from "@/services/files";
 import { FileText, Eye, Loader2 } from "lucide-react";
 import api from "@/lib/api";
+import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 
 const FILE_TYPE_LABELS: Record<string, string> = {
   pdf: "PDF",
@@ -18,6 +19,7 @@ export default function EmployeeDocumentsPage() {
   const [files, setFiles] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [viewing, setViewing] = useState<string | null>(null);
+  const { notify } = useConfirmDialog();
 
   useEffect(() => {
     getFiles()
@@ -36,9 +38,9 @@ export default function EmployeeDocumentsPage() {
       const win = window.open(url, "_blank");
       // revoke after the tab has had time to load
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
-      if (!win) alert("Pop-up blocked — please allow pop-ups for this site.");
+      if (!win) await notify("Pop-up blocked — please allow pop-ups for this site.", { destructive: true });
     } catch {
-      alert("Could not open file. You may not have permission.");
+      await notify("Could not open file. You may not have permission.", { destructive: true });
     } finally {
       setViewing(null);
     }

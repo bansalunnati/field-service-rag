@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { submitReport, getMyReports, previewReport } from "@/services/reports";
 import { Upload, Loader2, Eye } from "lucide-react";
+import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 
 const STATUS_STYLES: Record<string, string> = {
   pending: "bg-amber-100 text-amber-700",
@@ -29,13 +30,14 @@ export default function EmployeeReportsPage() {
   const [submitResult, setSubmitResult] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const [previewingId, setPreviewingId] = useState<string | null>(null);
+  const { notify } = useConfirmDialog();
 
   const handlePreview = async (id: string) => {
     setPreviewingId(id);
     try {
       await previewReport(id);
     } catch {
-      alert("Preview failed. The file may no longer be available.");
+      await notify("Preview failed. The file may no longer be available.", { destructive: true });
     } finally {
       setPreviewingId(null);
     }
@@ -57,7 +59,7 @@ export default function EmployeeReportsPage() {
   const handleSubmit = async () => {
     const file = fileRef.current?.files?.[0];
     if (!title.trim() || !file) {
-      alert("Title and file are required");
+      await notify("Title and file are required", { title: "Missing information" });
       return;
     }
     setSubmitting(true);

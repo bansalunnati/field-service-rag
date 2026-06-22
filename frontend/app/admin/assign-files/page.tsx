@@ -6,6 +6,7 @@ import { getFiles } from "@/services/files";
 import { getGroups } from "@/services/groups";
 import api from "@/lib/api";
 import { FileText, Users, CheckCircle, XCircle } from "lucide-react";
+import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 
 export default function AssignFilesPage() {
   const [files, setFiles] = useState<any[]>([]);
@@ -14,6 +15,7 @@ export default function AssignFilesPage() {
   const [fileGrants, setFileGrants] = useState<any[]>([]); // groups that have access to selected file
   const [loading, setLoading] = useState(true);
   const [toggling, setToggling] = useState<string | null>(null);
+  const { notify } = useConfirmDialog();
 
   const load = async () => {
     try {
@@ -51,7 +53,7 @@ export default function AssignFilesPage() {
       }
       await loadFileGrants(selectedFile.id);
     } catch {
-      alert("Action failed");
+      await notify("Action failed", { destructive: true });
     } finally {
       setToggling(null);
     }

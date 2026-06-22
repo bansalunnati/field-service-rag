@@ -36,6 +36,20 @@ def ask_question(question: str, pipeline: str = "safety") -> str:
     return result["answer"]
 
 
+def _retrieve_docs(question: str, pipeline: str, allowed_file_ids: Optional[List[str]], top_k: Optional[int] = None) -> List:
+    """Dispatches to the retrieval strategy configured for a single pipeline."""
+    if pipeline == "equipment":
+        kwargs = {"top_k": top_k} if top_k else {}
+        return retrieve_with_hybrid(question, pipeline=pipeline, allowed_file_ids=allowed_file_ids, **kwargs)
+    if pipeline == "field_reports":
+        kwargs = {"top_k": top_k} if top_k else {}
+        return retrieve_with_parent_expansion(question, pipeline=pipeline, allowed_file_ids=allowed_file_ids, **kwargs)
+
+    retriever = get_retriever(pipeline=pipeline, allowed_file_ids=allowed_file_ids)
+    docs = retriever.invoke(question)
+    return docs[:top_k] if top_k else docs
+
+
 def ask_question_with_citations(
     question: str,
     pipeline: str = "safety",
@@ -62,16 +76,9 @@ def ask_question_with_citations(
             "citations": list[dict],     # [{ref, source, page, excerpt}, ...]
         }
     """
-    # ── Step 1: Choose retrieval strategy ────────────────────────────────────
-    if pipeline == "equipment":
-        docs = retrieve_with_hybrid(question, pipeline=pipeline, allowed_file_ids=allowed_file_ids)
-    elif pipeline == "field_reports":
-        docs = retrieve_with_parent_expansion(question, pipeline=pipeline, allowed_file_ids=allowed_file_ids)
-    else:
-        retriever = get_retriever(pipeline=pipeline, allowed_file_ids=allowed_file_ids)
-        docs = retriever.invoke(question)
+    docs = _retrieve_docs(question, pipeline, allowed_file_ids)
 
-    # ── Step 2: Guard against empty retrieval ────────────────────────────────
+    # ── Guard against empty retrieval ────────────────────────────────────────
     if not docs:
         return {
             "answer": (
@@ -110,6 +117,80 @@ Question: {question}
 Answer:"""
 
     # ── Step 4: Generate and parse ────────────────────────────────────────────
+    response = llm.invoke(prompt)
+    answer, citations = _parse_citations(response.content, docs)
+
+    return {"answer": answer, "citations": citations}
+
+
+def ask_question_across_pipelines(
+    question: str,
+    pipelines: List[str],
+    history: Optional[List[Dict[str, str]]] = None,
+    allowed_file_ids_by_pipeline: Optional[Dict[str, Optional[List[str]]]] = None,
+) -> Dict[str, Any]:
+    """
+    Unified RAG — retrieves from every pipeline the caller can access and
+    answers from the merged set, instead of segregating by document category.
+
+    Args:
+        question  : The user's query string.
+        pipelines : Pipelines to search (e.g. all three for an admin, or
+                    only the ones a user's groups have been granted).
+        history   : Recent conversation turns (role + content dicts).
+        allowed_file_ids_by_pipeline : Per-pipeline file-id allowlist for
+                    employees (None per pipeline means admin/no restriction).
+
+    Returns:
+        Same shape as ask_question_with_citations.
+    """
+    allowed_file_ids_by_pipeline = allowed_file_ids_by_pipeline or {}
+
+    # Pull a few candidates from each pipeline rather than flooding the
+    # prompt with one pipeline's results — 4 per pipeline keeps the combined
+    # set roughly the same size as a single-pipeline query used to be.
+    per_pipeline_k = 4
+    docs = []
+    for p in pipelines:
+        allowed = allowed_file_ids_by_pipeline.get(p)
+        docs.extend(_retrieve_docs(question, p, allowed, top_k=per_pipeline_k))
+
+    if not docs:
+        return {
+            "answer": (
+                "I could not find that information in the documents available to you. "
+                "Try rephrasing your question, or contact your administrator if you believe "
+                "the relevant document has not been uploaded yet."
+            ),
+            "citations": [],
+        }
+
+    ref_block   = _build_ref_block(docs)
+    history_str = _build_history_str(history)
+
+    prompt = f"""You are an AI assistant for a Utilities and Facility Management team.
+Your role is to answer questions accurately using ONLY the reference documents provided below.
+
+RULES:
+- Cite every factual claim with an inline marker like [REF-1] or [REF-2].
+- If information comes from multiple sources, cite all relevant references.
+- Never invent, infer, or extrapolate beyond what the documents state.
+- If you cannot find the answer in the documents, say exactly:
+  "I could not find that information in the documents available to you."
+- After your answer, output a JSON block (fenced ```json ... ```) in this exact structure:
+  [
+    {{"ref": "REF-1", "source": "filename.pdf", "page": "3", "excerpt": "brief quote from document"}}
+  ]
+
+{f"CONVERSATION HISTORY:{chr(10)}{history_str}" if history_str else ""}
+
+REFERENCE DOCUMENTS:
+{ref_block}
+
+Question: {question}
+
+Answer:"""
+
     response = llm.invoke(prompt)
     answer, citations = _parse_citations(response.content, docs)
 

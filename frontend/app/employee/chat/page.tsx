@@ -18,7 +18,7 @@ function extractErrorMessage(err: unknown): string {
     if (res?.status === 403) {
       return (
         res.data?.detail ||
-        "Document authorization not available at the moment. Please contact your administrator to get access to a pipeline."
+        "You don't have access to any documents yet. Please contact your administrator."
       );
     }
     if (res?.data?.detail) return res.data.detail;
@@ -114,7 +114,7 @@ export default function EmployeeChatPage() {
       {noAccess && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-800 mb-2 flex items-center justify-between">
           <span>
-            <span className="font-medium">Pipeline not accessible.</span> Your group hasn't been granted access to this document category. Contact your administrator.
+            <span className="font-medium">No document access.</span> Your group hasn't been granted access to any documents yet. Contact your administrator.
           </span>
           <button
             onClick={() => setNoAccess(false)}

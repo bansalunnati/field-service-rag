@@ -5,6 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { getFiles, uploadFile } from "@/services/files";
 import { Upload, FileText, ToggleLeft, ToggleRight, Loader2, Trash2 } from "lucide-react";
 import api from "@/lib/api";
+import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 
 interface UploadedFile {
   id: string;
@@ -27,6 +28,7 @@ export default function DocumentsPage() {
   const [uploading, setUploading] = useState(false);
   const [pipeline, setPipeline] = useState("safety");
   const fileRef = useRef<HTMLInputElement>(null);
+  const { confirm, notify } = useConfirmDialog();
 
   const load = async () => {
     try {
@@ -53,19 +55,27 @@ export default function DocumentsPage() {
       if (fileRef.current) fileRef.current.value = "";
     } catch (err: any) {
       const detail = err?.response?.data?.detail ?? err?.message ?? "Upload failed";
-      alert(`Upload failed: ${detail}`);
+      await notify(detail, { title: "Upload failed", destructive: true });
     } finally {
       setUploading(false);
     }
   };
 
   const handleDelete = async (id: string, name: string) => {
-    if (!confirm(`Delete "${name}"? This cannot be undone.`)) return;
+    const ok = await confirm(`Delete "${name}"? This cannot be undone.`, {
+      title: "Delete document",
+      confirmLabel: "Delete",
+      destructive: true,
+    });
+    if (!ok) return;
     try {
       await api.delete(`/api/ingest/files/${id}`);
       setFiles((prev) => prev.filter((f) => f.id !== id));
     } catch (err: any) {
-      alert(err?.response?.data?.detail ?? "Delete failed");
+      await notify(err?.response?.data?.detail ?? "Delete failed", {
+        title: "Delete failed",
+        destructive: true,
+      });
     }
   };
 
@@ -78,7 +88,7 @@ export default function DocumentsPage() {
         )
       );
     } catch {
-      alert("Toggle failed");
+      await notify("Toggle failed", { title: "Error", destructive: true });
     }
   };
 

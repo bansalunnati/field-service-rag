@@ -17,12 +17,6 @@ interface HistorySidebarProps {
   onDeleteSession?: (id: string) => void;
 }
 
-const PIPELINE_LABELS: Record<string, string> = {
-  equipment: "Equipment",
-  safety: "Safety",
-  field_reports: "Field Reports",
-};
-
 function formatSessionTime(raw: string): string {
   try {
     const d = new Date(raw);
@@ -82,9 +76,6 @@ export default function HistorySidebar({
                 <span className="shrink-0 text-[10px] text-muted-foreground">
                   {formatSessionTime(session.updated_at)}
                 </span>
-              </div>
-              <div className="text-xs text-muted-foreground mt-0.5">
-                {PIPELINE_LABELS[session.pipeline] ?? session.pipeline}
               </div>
             </div>
             {onDeleteSession && (

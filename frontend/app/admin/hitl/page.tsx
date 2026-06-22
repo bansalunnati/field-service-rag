@@ -5,6 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { getHitlQueue, approveReport, rejectReport } from "@/services/hitl";
 import { previewReport } from "@/services/reports";
 import { CheckCircle, XCircle, Loader2, Eye } from "lucide-react";
+import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 
 export default function HitlPage() {
   const [queue, setQueue] = useState<any[]>([]);
@@ -12,13 +13,14 @@ export default function HitlPage() {
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [processing, setProcessing] = useState<string | null>(null);
   const [previewingId, setPreviewingId] = useState<string | null>(null);
+  const { notify } = useConfirmDialog();
 
   const handlePreview = async (reportId: string) => {
     setPreviewingId(reportId);
     try {
       await previewReport(reportId);
     } catch {
-      alert("Preview failed. The file may no longer be available.");
+      await notify("Preview failed. The file may no longer be available.", { destructive: true });
     } finally {
       setPreviewingId(null);
     }
@@ -50,7 +52,7 @@ export default function HitlPage() {
       }
       await load();
     } catch {
-      alert("Action failed");
+      await notify("Action failed", { destructive: true });
     } finally {
       setProcessing(null);
     }

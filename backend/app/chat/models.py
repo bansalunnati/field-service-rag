@@ -301,7 +301,7 @@ class QueryLog(Base):
     __tablename__ = "query_logs"
 
     id         = Column(String, primary_key=True, default=_uuid)
-    session_id = Column(String, ForeignKey("chat_sessions.id"), nullable=True, index=True)
+    session_id = Column(String, ForeignKey("chat_sessions.id", ondelete="SET NULL"), nullable=True, index=True)
     user_id    = Column(String, ForeignKey("users.id"), nullable=True, index=True)
     pipeline   = Column(String, nullable=False)
     question   = Column(Text, nullable=False)

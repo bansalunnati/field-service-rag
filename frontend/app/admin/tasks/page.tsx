@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { getTasks, createTask, updateTaskStatus, deleteTask } from "@/services/tasks";
 import { Plus, Trash2, Loader2, AlertTriangle } from "lucide-react";
+import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 
 const STATUS_COLORS: Record<string, string> = {
   open: "bg-amber-100 text-amber-700",
@@ -29,6 +30,7 @@ export default function AdminTasksPage() {
   });
   const [saving, setSaving] = useState(false);
   const [showForm, setShowForm] = useState(false);
+  const { confirm, notify } = useConfirmDialog();
 
   const load = async () => {
     try {
@@ -59,7 +61,7 @@ export default function AdminTasksPage() {
       await load();
     } catch (err: any) {
       const detail = err?.response?.data?.detail ?? err?.message ?? "Failed to create task";
-      alert(`Error: ${detail}`);
+      await notify(detail, { title: "Error", destructive: true });
     } finally {
       setSaving(false);
     }
@@ -71,7 +73,8 @@ export default function AdminTasksPage() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm("Delete task?")) return;
+    const ok = await confirm("Delete task?", { title: "Delete task", confirmLabel: "Delete", destructive: true });
+    if (!ok) return;
     await deleteTask(id);
     await load();
   };

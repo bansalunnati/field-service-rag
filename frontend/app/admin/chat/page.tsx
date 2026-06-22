@@ -10,20 +10,15 @@ import {
   getMessages,
 } from "@/services/chat";
 import api from "@/lib/api";
-
-const PIPELINES = [
-  { value: "safety", label: "Safety" },
-  { value: "equipment", label: "Equipment" },
-  { value: "field_reports", label: "Field Reports" },
-];
+import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 
 export default function AdminChatPage() {
   const [sessions, setSessions] = useState<any[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<any[]>([]);
   const [input, setInput] = useState("");
-  const [pipeline, setPipeline] = useState("safety");
   const [loading, setLoading] = useState(false);
+  const { notify } = useConfirmDialog();
 
   const loadSessions = async () => {
     const data = await getSessions();
@@ -37,7 +32,7 @@ export default function AdminChatPage() {
   };
 
   const handleNewChat = async () => {
-    const session = await createSession(pipeline, "New Chat");
+    const session = await createSession("safety", "New Chat");
     await loadSessions();
     setSessionId(session.id);
     setMessages([]);
@@ -58,7 +53,7 @@ export default function AdminChatPage() {
 
     let sid = sessionId;
     if (!sid) {
-      const session = await createSession(pipeline, input.slice(0, 40));
+      const session = await createSession("safety", input.slice(0, 40));
       sid = session.id;
       setSessionId(sid);
       await loadSessions();
@@ -75,7 +70,7 @@ export default function AdminChatPage() {
         { role: "assistant", content: result.answer, citations: result.citations },
       ]);
     } catch {
-      alert("Query failed");
+      await notify("Query failed", { destructive: true });
     } finally {
       setLoading(false);
     }
@@ -89,20 +84,6 @@ export default function AdminChatPage() {
     <div className="flex h-[calc(100vh-8rem)] gap-0 rounded-xl border overflow-hidden">
       {/* Sidebar */}
       <div className="w-60 shrink-0 border-r overflow-y-auto">
-        <div className="p-3 border-b">
-          <label className="text-xs text-muted-foreground block mb-1">Pipeline</label>
-          <select
-            value={pipeline}
-            onChange={(e) => setPipeline(e.target.value)}
-            className="w-full rounded border px-2 py-1.5 text-sm bg-background"
-          >
-            {PIPELINES.map((p) => (
-              <option key={p.value} value={p.value}>
-                {p.label}
-              </option>
-            ))}
-          </select>
-        </div>
         <HistorySidebar
           sessions={sessions}
           activeSessionId={sessionId}
