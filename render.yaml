@@ -32,27 +32,33 @@ services:
         fromDatabase:
           name: field-service-rag-db
           property: connectionString
-      # ── File storage dirs — only used as a LOCAL FALLBACK when R2 below is  ──
-      # ── not configured. With R2 set, uploaded files/reports go there       ──
-      # ── instead and survive restarts/redeploys; without it, these paths    ──
-      # ── live on the free plan's ephemeral disk and get wiped on restart.   ──
+      # ── File storage dirs — only used as a LOCAL FALLBACK when the object   ──
+      # ── storage vars below aren't configured. With those set, uploaded     ──
+      # ── files/reports go there instead and survive restarts/redeploys;     ──
+      # ── without them, these paths live on the free plan's ephemeral disk   ──
+      # ── and get wiped on restart.                                          ──
       - key: UPLOADS_DIR
         value: data/uploaded_files
       - key: REPORTS_DIR
         value: data/submitted_reports
-      # ── Object storage (Cloudflare R2) — durable storage for uploaded       ──
-      # ── documents and submitted reports. Create a bucket + API token at    ──
-      # ── dash.cloudflare.com > R2, then fill these in via the Render        ──
-      # ── dashboard (sync: false means "set manually, not in this file").    ──
-      # ── All four must be set together — if any is missing, the app falls   ──
-      # ── back to the ephemeral local disk above.                            ──
-      - key: R2_ACCOUNT_ID
+      # ── Object storage — durable storage for uploaded documents and        ──
+      # ── submitted reports. Works with any S3-compatible provider          ──
+      # ── (Supabase Storage, Cloudflare R2, AWS S3, etc) — only the         ──
+      # ── endpoint/region differ. For Supabase: Project Settings > Storage  ──
+      # ── > S3 Connection gives you the endpoint URL and region; generate   ──
+      # ── an access key from the same page. Fill these in via the Render    ──
+      # ── dashboard (sync: false means "set manually, not in this file").   ──
+      # ── All four required ones must be set together — if any is missing, ──
+      # ── the app falls back to the ephemeral local disk above.             ──
+      - key: STORAGE_ENDPOINT_URL
         sync: false
-      - key: R2_ACCESS_KEY_ID
+      - key: STORAGE_ACCESS_KEY_ID
         sync: false
-      - key: R2_SECRET_ACCESS_KEY
+      - key: STORAGE_SECRET_ACCESS_KEY
         sync: false
-      - key: R2_BUCKET_NAME
+      - key: STORAGE_BUCKET_NAME
+        sync: false
+      - key: STORAGE_REGION
         sync: false
       # ── Vector store — pgvector in the same Postgres DB above, NOT local   ──
       # ── disk, so embeddings survive container restarts/redeploys/scaling.   ──
