@@ -357,6 +357,39 @@ async def toggle_file_active(
     file.is_active = not (file.is_active if file.is_active is not None else True)
     db.commit()
     return {"id": file_id, "is_active": file.is_active}
+
+
+@router.post("/files/{file_id}/retry")
+async def retry_failed_upload(
+    file_id: str,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    user: TokenData = Depends(require_admin),
+):
+    """Re-runs OCR + ingestion for a file stuck in status='failed', without re-uploading."""
+    file = db.query(UploadedFile).filter(UploadedFile.id == file_id).first()
+    if not file:
+        raise HTTPException(status_code=404, detail="File not found")
+    if file.status != "failed":
+        raise HTTPException(status_code=400, detail="Only failed uploads can be retried")
+    if not file.file_path or not os.path.exists(file.file_path):
+        raise HTTPException(status_code=404, detail="Original file is no longer available on disk")
+
+    file.status = "processing"
+    file.error_message = None
+    db.commit()
+
+    suffix = os.path.splitext(file.file_path)[1].lower()
+    background_tasks.add_task(
+        _process_ocr_upload,
+        file_id=file_id,
+        file_path=file.file_path,
+        suffix=suffix,
+        pipeline=file.pipeline,
+    )
+    return {"id": file_id, "status": "processing"}
+
+
 @router.get("/files/{file_id}/view")
 async def view_uploaded_file(
     file_id: str,

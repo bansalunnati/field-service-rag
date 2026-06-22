@@ -29,16 +29,20 @@ import pytesseract
 from PIL import Image
 
 # OCR_TIMEOUT_SECONDS bounds how long a single Tesseract call may run.
-# This is now run from a background task (see ingest_router.py), not inside
-# the upload request, so it no longer needs to race an HTTP/proxy timeout —
-# it just needs to eventually fail cleanly instead of hanging forever.
-OCR_TIMEOUT_SECONDS = int(os.getenv("OCR_TIMEOUT_SECONDS", "90"))
+# This runs from a background task (see ingest_router.py), not inside the
+# upload request, so it no longer needs to race an HTTP/proxy timeout.
+# It hit the previous 90s ceiling even after downscaling + --oem 1 --psm 6,
+# which means Render's free-tier CPU is just genuinely this slow for OCR —
+# not a bug to tune away. Since nothing is blocked waiting on it anymore,
+# give it real headroom; this only guards against a truly hung process.
+OCR_TIMEOUT_SECONDS = int(os.getenv("OCR_TIMEOUT_SECONDS", "240"))
 
 # Cap the longest image dimension before OCR — this is the single biggest
-# lever on both runtime and memory for pytesseract/Tesseract. 1600px keeps
-# plenty of accuracy for scanned documents/photos while cutting pixel count
-# (and therefore runtime) substantially versus full-resolution phone photos.
-MAX_OCR_DIMENSION = int(os.getenv("MAX_OCR_DIMENSION", "1600"))
+# lever on both runtime and memory for pytesseract/Tesseract. Lowered from
+# 1600 to 1100: still very readable for printed/scanned forms, but roughly
+# halves the pixel count (and therefore runtime) versus 1600, which matters
+# a lot on Render's throttled free-tier CPU.
+MAX_OCR_DIMENSION = int(os.getenv("MAX_OCR_DIMENSION", "1100"))
 
 # --oem 1 forces LSTM-only recognition (Tesseract 4/5's modern engine),
 # skipping the legacy engine that --oem 3 (default) also runs — typically

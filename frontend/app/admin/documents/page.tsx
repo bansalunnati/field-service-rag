@@ -31,6 +31,22 @@ export default function DocumentsPage() {
   const [pipeline, setPipeline] = useState("safety");
   const fileRef = useRef<HTMLInputElement>(null);
   const { confirm, notify } = useConfirmDialog();
+  const [retryingId, setRetryingId] = useState<string | null>(null);
+
+  const handleRetry = async (id: string) => {
+    setRetryingId(id);
+    try {
+      await api.post(`/api/ingest/files/${id}/retry`);
+      await load();
+    } catch (err: any) {
+      await notify(err?.response?.data?.detail ?? "Retry failed", {
+        title: "Retry failed",
+        destructive: true,
+      });
+    } finally {
+      setRetryingId(null);
+    }
+  };
 
   const load = async () => {
     try {
@@ -202,17 +218,26 @@ export default function DocumentsPage() {
                             <Loader2 size={12} className="animate-spin" /> Processing…
                           </span>
                         ) : f.status === "failed" ? (
-                          <button
-                            onClick={() =>
-                              notify(f.error_message ?? "OCR failed for an unknown reason.", {
-                                title: `Processing failed: ${f.original_name}`,
-                                destructive: true,
-                              })
-                            }
-                            className="text-xs text-destructive underline underline-offset-2 hover:opacity-80"
-                          >
-                            Failed — view reason
-                          </button>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() =>
+                                notify(f.error_message ?? "OCR failed for an unknown reason.", {
+                                  title: `Processing failed: ${f.original_name}`,
+                                  destructive: true,
+                                })
+                              }
+                              className="text-xs text-destructive underline underline-offset-2 hover:opacity-80"
+                            >
+                              Failed — view reason
+                            </button>
+                            <button
+                              onClick={() => handleRetry(f.id)}
+                              disabled={retryingId === f.id}
+                              className="text-xs text-primary underline underline-offset-2 hover:opacity-80 disabled:opacity-50"
+                            >
+                              {retryingId === f.id ? "Retrying…" : "Retry"}
+                            </button>
+                          </div>
                         ) : (
                           f.chunk_count
                         )}
