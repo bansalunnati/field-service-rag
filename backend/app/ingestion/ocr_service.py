@@ -29,16 +29,25 @@ import pytesseract
 from PIL import Image
 
 # OCR_TIMEOUT_SECONDS bounds how long a single Tesseract call may run.
-# Without this, a large/dense image on a slow CPU (e.g. Render's free tier)
-# can run long enough that the platform kills the worker outright — which
-# surfaces to the client as a bare 502 with no useful error message at all.
-# Failing fast here turns that into a clear, actionable 422 instead.
-OCR_TIMEOUT_SECONDS = int(os.getenv("OCR_TIMEOUT_SECONDS", "25"))
+# This is now run from a background task (see ingest_router.py), not inside
+# the upload request, so it no longer needs to race an HTTP/proxy timeout —
+# it just needs to eventually fail cleanly instead of hanging forever.
+OCR_TIMEOUT_SECONDS = int(os.getenv("OCR_TIMEOUT_SECONDS", "90"))
 
 # Cap the longest image dimension before OCR — this is the single biggest
-# lever on both runtime and memory for pytesseract/Tesseract, and accuracy
-# past ~2000px rarely improves for scanned documents or photos.
-MAX_OCR_DIMENSION = int(os.getenv("MAX_OCR_DIMENSION", "2000"))
+# lever on both runtime and memory for pytesseract/Tesseract. 1600px keeps
+# plenty of accuracy for scanned documents/photos while cutting pixel count
+# (and therefore runtime) substantially versus full-resolution phone photos.
+MAX_OCR_DIMENSION = int(os.getenv("MAX_OCR_DIMENSION", "1600"))
+
+# --oem 1 forces LSTM-only recognition (Tesseract 4/5's modern engine),
+# skipping the legacy engine that --oem 3 (default) also runs — typically
+# 2-3x faster with equal or better accuracy on clean printed/scanned text.
+# --psm 6 assumes a single uniform block of text, which skips Tesseract's
+# automatic page-segmentation/orientation-detection pass — that pass is
+# disproportionately expensive on slow CPUs and unnecessary for the scanned
+# forms/checklists this app ingests.
+_TESSERACT_CONFIG = os.getenv("TESSERACT_CONFIG", "--oem 1 --psm 6")
 
 # On Windows (local dev), Tesseract isn't on PATH so we point to it directly.
 # On Linux (Render), it's installed via apt and lives on PATH — no override needed.
@@ -76,7 +85,10 @@ def _ocr_image(img: Image.Image) -> tuple[str, list]:
         pytesseract.TesseractError if OCR exceeds OCR_TIMEOUT_SECONDS.
     """
     data = pytesseract.image_to_data(
-        img, output_type=pytesseract.Output.DICT, timeout=OCR_TIMEOUT_SECONDS
+        img,
+        output_type=pytesseract.Output.DICT,
+        timeout=OCR_TIMEOUT_SECONDS,
+        config=_TESSERACT_CONFIG,
     )
 
     lines: dict = {}

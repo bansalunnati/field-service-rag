@@ -185,6 +185,11 @@ class UploadedFile(Base):
     file_path     = Column(String, nullable=True)   # original file on disk, for in-browser viewing only
     uploaded_by   = Column(String, ForeignKey("users.id"), nullable=False, index=True)
     uploaded_at   = Column(DateTime, default=datetime.utcnow)
+    # "ready" | "processing" | "failed" — images/scanned PDFs go through OCR
+    # in a background task (too slow to finish inside the upload request on
+    # constrained hosts), so the row exists before ingestion completes.
+    status         = Column(String, default="ready")
+    error_message  = Column(Text, nullable=True)
  
     uploaded_by_user = relationship("User", back_populates="uploaded_files")
     group_accesses    = relationship("GroupFileAccess", back_populates="file", cascade="all, delete-orphan")

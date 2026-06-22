@@ -6,24 +6,24 @@ POST /api/ingest/upload  — accepts PDF, DOCX, TXT, CSV, MD
 
 import os
 import tempfile
-import shutil
 import uuid
 
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, UploadFile, File, Form, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from fastapi.responses import StreamingResponse
 from app.chat.models import UploadedFile, GroupFileAccess, UserGroup, Group
-from app.auth.auth_service import get_current_user   # in addition to require_permission 
+from app.auth.auth_service import get_current_user   # in addition to require_permission
 
-from app.chat.database import get_db
+from app.chat.database import get_db, SessionLocal
 from app.chat.models import UploadedFile
 from app.auth.auth_service import require_permission, TokenData
 from app.ingestion.ingest_documents import ingest_single_file
+from app.ingestion.document_loader import _detect_pipeline
 from app.retrieval.retriever import invalidate_bm25_cache
 
 router = APIRouter(prefix="/api/ingest", tags=["ingestion"])
@@ -65,15 +65,80 @@ MEDIA_TYPES = {
 class IngestResponse(BaseModel):
     filename:        str
     pipeline:        str
-    pages:           int
-    chunks_created:  int
+    pages:           int = 0
+    chunks_created:  int = 0
     message:         str
     ocr_used:        bool = False
     ocr_confidence:  float | None = None
+    status:          str = "ready"   # "ready" | "processing"
+    file_id:         str | None = None
+
+
+def _process_ocr_upload(
+    file_id: str,
+    file_path: str,
+    suffix: str,
+    pipeline: Optional[str],
+):
+    """
+    Runs OCR + ingestion for an image/scanned-PDF upload OUTSIDE the HTTP
+    request, as a background task.
+
+    Why: Tesseract OCR on a free-tier/CPU-constrained host can take well
+    longer than any reasonable HTTP request timeout. Running it inline used
+    to either hang until the platform killed the worker (a bare 502 with no
+    useful message) or hit our own client-side timeout and fail outright.
+    The UploadedFile row is created with status='processing' before this
+    runs, and updated here once OCR + ingestion finish — or marked 'failed'
+    with a reason instead of being left stuck.
+    """
+    db = SessionLocal()
+    txt_path = None
+    try:
+        if suffix in IMAGE_EXTENSIONS:
+            from app.ingestion.ocr_service import extract_text_from_image
+            ocr_text, ocr_confidence = extract_text_from_image(file_path)
+        else:
+            from app.ingestion.ocr_service import extract_text_from_scanned_pdf
+            ocr_text, ocr_confidence = extract_text_from_scanned_pdf(file_path)
+
+        if not ocr_text.strip():
+            raise ValueError(
+                "OCR could not find any readable text. Try a sharper, well-lit, "
+                "higher-resolution scan/photo with the text facing the camera squarely."
+            )
+
+        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False, mode="w", encoding="utf-8") as txt_tmp:
+            txt_tmp.write(ocr_text)
+            txt_path = txt_tmp.name
+
+        result = ingest_single_file(txt_path, pipeline=pipeline, file_id=file_id)
+        invalidate_bm25_cache(result["pipeline"])
+
+        record = db.query(UploadedFile).filter(UploadedFile.id == file_id).first()
+        if record:
+            record.pipeline = result["pipeline"]
+            record.chunk_count = result["chunks"]
+            record.ocr_confidence = ocr_confidence
+            record.status = "ready"
+            record.error_message = None
+            db.commit()
+    except Exception as exc:
+        db.rollback()
+        record = db.query(UploadedFile).filter(UploadedFile.id == file_id).first()
+        if record:
+            record.status = "failed"
+            record.error_message = str(exc)
+            db.commit()
+    finally:
+        if txt_path and os.path.exists(txt_path):
+            os.unlink(txt_path)
+        db.close()
 
 
 @router.post("/upload", response_model=IngestResponse)
 async def upload_document(
+    background_tasks: BackgroundTasks,
     file:     UploadFile     = File(...),
     pipeline: Optional[str]  = Form(None),
     db:       Session         = Depends(get_db),
@@ -98,109 +163,93 @@ async def upload_document(
     if len(contents) > MAX_FILE_MB * 1024 * 1024:
         raise HTTPException(status_code=413, detail=f"File exceeds {MAX_FILE_MB}MB limit")
 
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        tmp.write(contents)
-        tmp_path = tmp.name
-
-    permanent_path = None
-    ocr_used = False
-    ocr_confidence = None
-
-    # Pre-generate the file ID so it can be stamped on ChromaDB chunks at ingestion time.
+    # Pre-generate the file ID so it can be stamped on chunks at ingestion time.
     # This enables per-file retrieval filtering for employee access control.
     new_file_id = str(uuid.uuid4())
-    try:
-        # ── OCR step (images and scanned PDFs) ────────────────────────────────
-        # For image files: run OCR to extract text, then write it to a .txt temp
-        # file so the normal ingestion pipeline can handle it.
-        # For PDFs with no text layer: same approach — OCR each page first.
-        ingest_path = tmp_path  # default: ingest the original file
+    stored_name = f"{new_file_id}{suffix}"
+    permanent_path = os.path.join(UPLOADS_DIR, stored_name)
+    with open(permanent_path, "wb") as f:
+        f.write(contents)
 
-        if suffix in IMAGE_EXTENSIONS:
-            # It's an image — always OCR it
-            try:
-                from app.ingestion.ocr_service import extract_text_from_image
-                ocr_text, ocr_confidence = extract_text_from_image(tmp_path)
-            except Exception as exc:
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"OCR failed for image '{file.filename}': {exc}. "
-                           "Ensure Tesseract is installed on the server (apt-get install -y tesseract-ocr).",
-                )
-            if not ocr_text.strip():
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"OCR could not find any readable text in '{file.filename}'. "
-                           "Try a sharper, well-lit, higher-resolution photo with the text "
-                           "facing the camera squarely.",
-                )
-            ocr_used = True
-            # Write extracted text to a temp .txt file for ingestion
-            with tempfile.NamedTemporaryFile(suffix=".txt", delete=False, mode="w", encoding="utf-8") as txt_tmp:
-                txt_tmp.write(ocr_text)
-                ingest_path = txt_tmp.name
+    # Determine whether OCR is required up front — images always need it,
+    # PDFs only if they have no text layer (a quick pypdf check, not OCR itself).
+    needs_ocr = suffix in IMAGE_EXTENSIONS
+    if suffix == ".pdf":
+        from app.ingestion.ocr_service import is_scanned_pdf
+        needs_ocr = is_scanned_pdf(permanent_path)
 
-        elif suffix == ".pdf":
-            # Check if the PDF is scanned (no text layer)
-            try:
-                from app.ingestion.ocr_service import is_scanned_pdf, extract_text_from_scanned_pdf
-                if is_scanned_pdf(tmp_path):
-                    ocr_text, ocr_confidence = extract_text_from_scanned_pdf(tmp_path)
-                    if not ocr_text.strip():
-                        raise HTTPException(
-                            status_code=422,
-                            detail=f"OCR could not find any readable text in '{file.filename}'. "
-                                   "Try a clearer scan or a higher-resolution photo.",
-                        )
-                    ocr_used = True
-                    with tempfile.NamedTemporaryFile(suffix=".txt", delete=False, mode="w", encoding="utf-8") as txt_tmp:
-                        txt_tmp.write(ocr_text)
-                        ingest_path = txt_tmp.name
-            except HTTPException:
-                raise
-            except Exception as exc:
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"OCR failed for scanned PDF '{file.filename}': {exc}. "
-                           "Ensure Tesseract and poppler-utils are installed on the server.",
-                )
-
-        try:
-            result = ingest_single_file(ingest_path, pipeline=pipeline, file_id=new_file_id)
-        except Exception as exc:
-            raise HTTPException(status_code=422, detail=f"Ingestion failed: {exc}")
-        finally:
-            # Clean up the OCR temp .txt file if we created one
-            if ingest_path != tmp_path and os.path.exists(ingest_path):
-                os.unlink(ingest_path)
-
-        invalidate_bm25_cache(result["pipeline"])
-
-        stored_name = f"{new_file_id}{suffix}"
-        permanent_path = os.path.join(UPLOADS_DIR, stored_name)
-        shutil.copyfile(tmp_path, permanent_path)
-
+    if needs_ocr:
+        resolved_pipeline = pipeline or _detect_pipeline(file.filename)
         try:
             uploaded_file = UploadedFile(
                 id=new_file_id,
                 filename=file.filename,
                 original_name=file.filename,
                 file_type=suffix.replace(".", ""),
-                pipeline=result["pipeline"],
-                chunk_count=result["chunks"],
-                ocr_used=ocr_used,
-                ocr_confidence=ocr_confidence,
+                pipeline=resolved_pipeline,
+                chunk_count=0,
+                ocr_used=True,
+                ocr_confidence=None,
                 uploaded_by=user.user_id,
                 file_path=permanent_path,
+                status="processing",
             )
             db.add(uploaded_file)
             db.commit()
-            db.refresh(uploaded_file)
         except Exception as exc:
             db.rollback()
+            os.remove(permanent_path)
             raise HTTPException(status_code=500, detail=f"Database error: {exc}")
-    finally:
-        os.unlink(tmp_path)
+
+        background_tasks.add_task(
+            _process_ocr_upload,
+            file_id=new_file_id,
+            file_path=permanent_path,
+            suffix=suffix,
+            pipeline=pipeline,
+        )
+
+        return IngestResponse(
+            filename=file.filename,
+            pipeline=resolved_pipeline,
+            message=(
+                f"'{file.filename}' needs OCR — processing in the background. "
+                "It'll show its chunk count here once ready; refresh to check."
+            ),
+            ocr_used=True,
+            status="processing",
+            file_id=new_file_id,
+        )
+
+    # ── No OCR needed — ingest synchronously, same as before ────────────────
+    try:
+        result = ingest_single_file(permanent_path, pipeline=pipeline, file_id=new_file_id)
+    except Exception as exc:
+        os.remove(permanent_path)
+        raise HTTPException(status_code=422, detail=f"Ingestion failed: {exc}")
+
+    invalidate_bm25_cache(result["pipeline"])
+
+    try:
+        uploaded_file = UploadedFile(
+            id=new_file_id,
+            filename=file.filename,
+            original_name=file.filename,
+            file_type=suffix.replace(".", ""),
+            pipeline=result["pipeline"],
+            chunk_count=result["chunks"],
+            ocr_used=False,
+            ocr_confidence=None,
+            uploaded_by=user.user_id,
+            file_path=permanent_path,
+            status="ready",
+        )
+        db.add(uploaded_file)
+        db.commit()
+        db.refresh(uploaded_file)
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Database error: {exc}")
 
     return IngestResponse(
         filename=file.filename,
@@ -208,8 +257,9 @@ async def upload_document(
         pages=result["pages"],
         chunks_created=result["chunks"],
         message=f"Ingested {result['chunks']} chunks into '{result['pipeline']}' pipeline",
-        ocr_used=ocr_used,
-        ocr_confidence=ocr_confidence,
+        ocr_used=False,
+        status="ready",
+        file_id=new_file_id,
     )
 
 
@@ -267,6 +317,8 @@ async def list_uploaded_files(
             "uploaded_by": file.uploaded_by,
             "uploaded_at": file.uploaded_at,
             "viewable": bool(file.file_path),
+            "status": file.status or "ready",
+            "error_message": file.error_message,
         }
         for file in files
     ]

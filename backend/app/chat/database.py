@@ -31,6 +31,7 @@ def init_db():
     from app.chat import models  # noqa — registers models with Base
     Base.metadata.create_all(bind=engine)
     _migrate_query_log_fk()
+    _migrate_uploaded_files_status()
 
 
 def _migrate_query_log_fk():
@@ -67,6 +68,25 @@ def _migrate_query_log_fk():
                     FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE SET NULL;
             END $$;
         """))
+
+
+def _migrate_uploaded_files_status():
+    """
+    Adds the status/error_message columns used for background OCR processing
+    to an already-deployed uploaded_files table. create_all() only creates
+    tables that don't exist yet, so new columns on an existing table need
+    this — idempotent via IF NOT EXISTS, safe to run every startup.
+    """
+    if not DATABASE_URL.startswith("postgresql"):
+        return
+    from sqlalchemy import text
+    with engine.begin() as conn:
+        conn.execute(text(
+            "ALTER TABLE uploaded_files ADD COLUMN IF NOT EXISTS status VARCHAR DEFAULT 'ready'"
+        ))
+        conn.execute(text(
+            "ALTER TABLE uploaded_files ADD COLUMN IF NOT EXISTS error_message TEXT"
+        ))
 
 
 def get_db():

@@ -18,6 +18,8 @@ interface UploadedFile {
   is_active?: boolean;
   ocr_used?: boolean;
   ocr_confidence?: number | null;
+  status?: "ready" | "processing" | "failed";
+  error_message?: string | null;
 }
 
 const PIPELINES = ["equipment", "safety", "field_reports"];
@@ -45,14 +47,27 @@ export default function DocumentsPage() {
     load();
   }, []);
 
+  // While any file is still being OCR'd in the background, poll for updates
+  // so the chunk count / status flips from "Processing" to ready without
+  // the admin needing to manually refresh.
+  useEffect(() => {
+    const hasProcessing = files.some((f) => f.status === "processing");
+    if (!hasProcessing) return;
+    const interval = setInterval(load, 4000);
+    return () => clearInterval(interval);
+  }, [files]);
+
   const handleUpload = async () => {
     const file = fileRef.current?.files?.[0];
     if (!file) return;
     setUploading(true);
     try {
-      await uploadFile(file, pipeline);
+      const result = await uploadFile(file, pipeline);
       await load();
       if (fileRef.current) fileRef.current.value = "";
+      if (result?.status === "processing") {
+        await notify(result.message, { title: "Processing in background" });
+      }
     } catch (err: any) {
       const detail = err?.response?.data?.detail ?? err?.message ?? "Upload failed";
       await notify(detail, { title: "Upload failed", destructive: true });
@@ -181,7 +196,22 @@ export default function DocumentsPage() {
                           {f.pipeline}
                         </span>
                       </td>
-                      <td className="py-2">{f.chunk_count}</td>
+                      <td className="py-2">
+                        {f.status === "processing" ? (
+                          <span className="inline-flex items-center gap-1 text-xs text-amber-700">
+                            <Loader2 size={12} className="animate-spin" /> Processing…
+                          </span>
+                        ) : f.status === "failed" ? (
+                          <span
+                            className="text-xs text-destructive cursor-help"
+                            title={f.error_message ?? "OCR failed"}
+                          >
+                            Failed
+                          </span>
+                        ) : (
+                          f.chunk_count
+                        )}
+                      </td>
                       <td className="py-2 uppercase text-xs text-muted-foreground">
                         {f.file_type}
                       </td>
