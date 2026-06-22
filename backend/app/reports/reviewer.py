@@ -23,6 +23,7 @@ from app.chat.models import FieldReport, HITLReview, Notification, User
 from app.retrieval.retriever import retrieve_with_parent_expansion, retrieve_with_hybrid, get_retriever
 from app.llm.llm_config import llm
 from app.ingestion.document_loader import _load_pdf, _load_docx, _load_txt
+from app.storage import file_storage
 
 # Templates/checklists/SOPs an admin uploads can live in any pipeline —
 # e.g. "Hazardous Materials Field Inspection Checklist.pdf" or "SOP telecom
@@ -34,18 +35,29 @@ from app.ingestion.document_loader import _load_pdf, _load_docx, _load_txt
 ALL_PIPELINES = ["field_reports", "safety", "equipment"]
 
 
-def run_agentic_review(report_id: str, file_path: str, report_type: str) -> None:
+def run_agentic_review(report_id: str, file_ref: str, report_type: str) -> None:
     """
     Entry point called by BackgroundTask.
     Opens its own DB session since it runs outside the request lifecycle.
+
+    `file_ref` is whatever submit_report stored — a local path or an
+    "r2://..." object storage reference. Downloaded to a local temp file
+    here since the document loaders / OCR all need a real filesystem path;
+    this also means any OCR work happens here, in the background, not
+    inline in the submit request.
     """
     db = SessionLocal()
+    local_path = None
     try:
-        _review(db, report_id, file_path, report_type)
+        suffix = os.path.splitext(file_ref.split("r2://")[-1])[1] if file_ref else ""
+        local_path = file_storage.download_to_tempfile(file_ref, suffix=suffix)
+        _review(db, report_id, local_path, report_type)
     except Exception as e:
         # Don't crash the server — mark the report as needs_hitl so a human picks it up.
         _fallback_to_hitl(db, report_id, reason=f"Reviewer error: {str(e)}")
     finally:
+        if local_path and os.path.exists(local_path):
+            os.unlink(local_path)
         db.close()
 
 
@@ -56,8 +68,12 @@ def _review(db: Session, report_id: str, file_path: str, report_type: str) -> No
     if not report:
         return
 
-    # Step 1 — Extract text from the uploaded file
-    submitted_text = _extract_text(file_path)
+    # Step 1 — Extract text from the uploaded file (OCR'd here if needed —
+    # this is the background task, so slow OCR doesn't block the submit request)
+    submitted_text, ocr_used = _extract_text(file_path)
+    report.metadata_json = {**(report.metadata_json or {}), "ocr_used": ocr_used}
+    db.commit()
+
     if not submitted_text.strip():
         _fallback_to_hitl(db, report_id, reason="Could not extract text from the uploaded file.")
         return
@@ -193,31 +209,29 @@ def _retrieve_templates(query: str, per_pipeline_k: int = 3) -> list:
     return docs
 
 
-def _extract_text(file_path: str) -> str:
+def _extract_text(file_path: str) -> tuple[str, bool]:
+    """Returns (extracted_text, ocr_used)."""
     ext = os.path.splitext(file_path)[1].lower()
 
-    # Handle OCR side-car files produced by the submit endpoint
-    if file_path.endswith(".ocr.txt"):
-        ext = ".txt"
-
-    loader_map = {
-        ".pdf":  _load_pdf,
-        ".docx": _load_docx,
-        ".txt":  _load_txt,
-        ".md":   _load_txt,
-    }
-
-    # Images — run OCR directly (fallback if router didn't pre-process)
     if ext in {".png", ".jpg", ".jpeg"}:
         from app.ingestion.ocr_service import extract_text_from_image
         text, _ = extract_text_from_image(file_path)
-        return text
+        return text, True
 
+    if ext == ".pdf":
+        from app.ingestion.ocr_service import is_scanned_pdf, extract_text_from_scanned_pdf
+        if is_scanned_pdf(file_path):
+            text, _ = extract_text_from_scanned_pdf(file_path)
+            return text, True
+        docs = _load_pdf(file_path)
+        return "\n\n".join(d.page_content for d in docs), False
+
+    loader_map = {".docx": _load_docx, ".txt": _load_txt, ".md": _load_txt}
     loader = loader_map.get(ext)
     if not loader:
-        return ""
+        return "", False
     docs = loader(file_path)
-    return "\n\n".join(d.page_content for d in docs)
+    return "\n\n".join(d.page_content for d in docs), False
 
 
 def _parse_verdict(raw: str) -> tuple:

@@ -15,7 +15,7 @@ from fastapi import APIRouter, BackgroundTasks, UploadFile, File, Form, Depends,
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response
 from app.chat.models import UploadedFile, GroupFileAccess, UserGroup, Group
 from app.auth.auth_service import get_current_user   # in addition to require_permission
 
@@ -25,6 +25,7 @@ from app.auth.auth_service import require_permission, TokenData
 from app.ingestion.ingest_documents import ingest_single_file
 from app.ingestion.document_loader import _detect_pipeline
 from app.retrieval.retriever import invalidate_bm25_cache
+from app.storage import file_storage
 
 router = APIRouter(prefix="/api/ingest", tags=["ingestion"])
 
@@ -76,7 +77,7 @@ class IngestResponse(BaseModel):
 
 def _process_ocr_upload(
     file_id: str,
-    file_path: str,
+    local_path: str,
     suffix: str,
     pipeline: Optional[str],
 ):
@@ -91,16 +92,21 @@ def _process_ocr_upload(
     The UploadedFile row is created with status='processing' before this
     runs, and updated here once OCR + ingestion finish — or marked 'failed'
     with a reason instead of being left stuck.
+
+    `local_path` is always a real filesystem path (a temp file), regardless
+    of whether the durable copy lives on local disk or in object storage —
+    Tesseract/pdf2image need an actual path, not bytes, so the caller is
+    responsible for handing one in and this function deletes it when done.
     """
     db = SessionLocal()
     txt_path = None
     try:
         if suffix in IMAGE_EXTENSIONS:
             from app.ingestion.ocr_service import extract_text_from_image
-            ocr_text, ocr_confidence = extract_text_from_image(file_path)
+            ocr_text, ocr_confidence = extract_text_from_image(local_path)
         else:
             from app.ingestion.ocr_service import extract_text_from_scanned_pdf
-            ocr_text, ocr_confidence = extract_text_from_scanned_pdf(file_path)
+            ocr_text, ocr_confidence = extract_text_from_scanned_pdf(local_path)
 
         if not ocr_text.strip():
             raise ValueError(
@@ -133,6 +139,8 @@ def _process_ocr_upload(
     finally:
         if txt_path and os.path.exists(txt_path):
             os.unlink(txt_path)
+        if local_path and os.path.exists(local_path):
+            os.unlink(local_path)
         db.close()
 
 
@@ -167,16 +175,22 @@ async def upload_document(
     # This enables per-file retrieval filtering for employee access control.
     new_file_id = str(uuid.uuid4())
     stored_name = f"{new_file_id}{suffix}"
-    permanent_path = os.path.join(UPLOADS_DIR, stored_name)
-    with open(permanent_path, "wb") as f:
-        f.write(contents)
+
+    # A local temp copy is needed regardless of storage backend — Tesseract,
+    # pdf2image, pypdf, and python-docx all operate on real filesystem paths.
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp.write(contents)
+        tmp_path = tmp.name
 
     # Determine whether OCR is required up front — images always need it,
     # PDFs only if they have no text layer (a quick pypdf check, not OCR itself).
     needs_ocr = suffix in IMAGE_EXTENSIONS
     if suffix == ".pdf":
         from app.ingestion.ocr_service import is_scanned_pdf
-        needs_ocr = is_scanned_pdf(permanent_path)
+        needs_ocr = is_scanned_pdf(tmp_path)
+
+    # Durable copy — R2 if configured, else local disk under UPLOADS_DIR.
+    permanent_ref = file_storage.save_bytes(stored_name, contents, base_dir=UPLOADS_DIR)
 
     if needs_ocr:
         resolved_pipeline = pipeline or _detect_pipeline(file.filename)
@@ -191,20 +205,22 @@ async def upload_document(
                 ocr_used=True,
                 ocr_confidence=None,
                 uploaded_by=user.user_id,
-                file_path=permanent_path,
+                file_path=permanent_ref,
                 status="processing",
             )
             db.add(uploaded_file)
             db.commit()
         except Exception as exc:
             db.rollback()
-            os.remove(permanent_path)
+            file_storage.delete(permanent_ref)
+            os.unlink(tmp_path)
             raise HTTPException(status_code=500, detail=f"Database error: {exc}")
 
+        # _process_ocr_upload owns tmp_path from here and deletes it when done.
         background_tasks.add_task(
             _process_ocr_upload,
             file_id=new_file_id,
-            file_path=permanent_path,
+            local_path=tmp_path,
             suffix=suffix,
             pipeline=pipeline,
         )
@@ -223,10 +239,12 @@ async def upload_document(
 
     # ── No OCR needed — ingest synchronously, same as before ────────────────
     try:
-        result = ingest_single_file(permanent_path, pipeline=pipeline, file_id=new_file_id)
+        result = ingest_single_file(tmp_path, pipeline=pipeline, file_id=new_file_id)
     except Exception as exc:
-        os.remove(permanent_path)
+        file_storage.delete(permanent_ref)
         raise HTTPException(status_code=422, detail=f"Ingestion failed: {exc}")
+    finally:
+        os.unlink(tmp_path)
 
     invalidate_bm25_cache(result["pipeline"])
 
@@ -241,7 +259,7 @@ async def upload_document(
             ocr_used=False,
             ocr_confidence=None,
             uploaded_by=user.user_id,
-            file_path=permanent_path,
+            file_path=permanent_ref,
             status="ready",
         )
         db.add(uploaded_file)
@@ -330,16 +348,11 @@ async def delete_uploaded_file(
     db: Session = Depends(get_db),
     user: TokenData = Depends(require_admin),
 ):
-    """Delete a file record and its stored copy on disk (admin only)."""
+    """Delete a file record and its stored copy (admin only)."""
     file = db.query(UploadedFile).filter(UploadedFile.id == file_id).first()
     if not file:
         raise HTTPException(status_code=404, detail="File not found")
-    # Remove from disk if present
-    if file.file_path and os.path.exists(file.file_path):
-        try:
-            os.remove(file.file_path)
-        except OSError:
-            pass
+    file_storage.delete(file.file_path)
     db.delete(file)
     db.commit()
 
@@ -372,18 +385,19 @@ async def retry_failed_upload(
         raise HTTPException(status_code=404, detail="File not found")
     if file.status != "failed":
         raise HTTPException(status_code=400, detail="Only failed uploads can be retried")
-    if not file.file_path or not os.path.exists(file.file_path):
-        raise HTTPException(status_code=404, detail="Original file is no longer available on disk")
+    if not file.file_path or not file_storage.exists(file.file_path):
+        raise HTTPException(status_code=404, detail="Original file is no longer available")
 
     file.status = "processing"
     file.error_message = None
     db.commit()
 
     suffix = os.path.splitext(file.file_path)[1].lower()
+    local_path = file_storage.download_to_tempfile(file.file_path, suffix=suffix)
     background_tasks.add_task(
         _process_ocr_upload,
         file_id=file_id,
-        file_path=file.file_path,
+        local_path=local_path,
         suffix=suffix,
         pipeline=file.pipeline,
     )
@@ -413,17 +427,14 @@ async def view_uploaded_file(
         if file.id not in visible_ids:
             raise HTTPException(status_code=403, detail="You do not have access to this file")
  
-    if not file.file_path or not os.path.exists(file.file_path):
+    if not file.file_path or not file_storage.exists(file.file_path):
         raise HTTPException(status_code=404, detail="File is no longer available")
- 
+
     media_type = MEDIA_TYPES.get(file.file_type, "application/octet-stream")
- 
-    def _stream():
-        with open(file.file_path, "rb") as f:
-            yield from f
- 
-    return StreamingResponse(
-        _stream(),
+    data = file_storage.load_bytes(file.file_path)
+
+    return Response(
+        content=data,
         media_type=media_type,
         headers={"Content-Disposition": f'inline; filename="{file.original_name}"'},
     )

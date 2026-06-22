@@ -16,14 +16,14 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from app.auth.auth_service import TokenData, get_current_user
 from app.chat.database import get_db
 from app.chat.models import FieldReport, HITLReview, Notification, User
 from app.reports.reviewer import run_agentic_review
-from app.chat.models import FieldReport, HITLReview, Notification, User
+from app.storage import file_storage
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
@@ -81,9 +81,13 @@ async def submit_report(
     """
     Employee submits a completed inspection report.
 
-    - File is saved to REPORTS_DIR (not ingested into ChromaDB).
+    - File is persisted via file_storage (R2 if configured, else local disk
+      under REPORTS_DIR) — not ingested into the vector store.
     - A FieldReport record is created with status='under_review'.
-    - The agentic reviewer is launched immediately as a background task.
+    - The agentic reviewer is launched immediately as a background task,
+      which also handles OCR if the file needs it (kept out of this
+      request entirely — OCR is too slow to run inline, same issue fixed
+      for document uploads).
     - Returns 202 Accepted — review result arrives via Notifications.
     """
     suffix = Path(file.filename).suffix.lower()
@@ -95,59 +99,31 @@ async def submit_report(
 
     contents = await file.read()
 
-    # Save file to disk — keyed by a FieldReport UUID we generate now
     import uuid
     report_id = str(uuid.uuid4())
     safe_name = f"{report_id}{suffix}"
-    file_path = os.path.join(REPORTS_DIR, safe_name)
-    with open(file_path, "wb") as f:
-        f.write(contents)
+    file_ref = file_storage.save_bytes(safe_name, contents, base_dir=REPORTS_DIR)
 
-    # If the uploaded file is an image or a scanned PDF (no text layer), run OCR
-    # and save the extracted text as a .txt file alongside the original.
-    # The reviewer will use this text file instead of trying to read the image directly.
-    review_path = file_path   # default: reviewer reads the original file
-    ocr_used = False
-
-    if suffix in IMAGE_EXTENSIONS:
-        from app.ingestion.ocr_service import extract_text_from_image
-        ocr_text, _ = extract_text_from_image(file_path)
-        ocr_used = True
-        txt_path = file_path + ".ocr.txt"
-        with open(txt_path, "w", encoding="utf-8") as f:
-            f.write(ocr_text)
-        review_path = txt_path
-
-    elif suffix == ".pdf":
-        from app.ingestion.ocr_service import is_scanned_pdf, extract_text_from_scanned_pdf
-        if is_scanned_pdf(file_path):
-            ocr_text, _ = extract_text_from_scanned_pdf(file_path)
-            ocr_used = True
-            txt_path = file_path + ".ocr.txt"
-            with open(txt_path, "w", encoding="utf-8") as f:
-                f.write(ocr_text)
-            review_path = txt_path
-
-    # Write FieldReport record
+    # Write FieldReport record. ocr_used/content are filled in by the
+    # reviewer once it has actually extracted the text.
     report = FieldReport(
         id=report_id,
         title=title,
-        content="",                           # populated by reviewer after extraction
+        content="",
         submitted_by=user.user_id,
         status="under_review",
         metadata_json={
             "report_type": report_type,
             "original_filename": file.filename,
-            "file_path": file_path,
-            "ocr_used": ocr_used,
+            "file_path": file_ref,
+            "ocr_used": False,
         },
     )
     db.add(report)
     db.commit()
     db.refresh(report)
     _notify_admins_new_report(db, report, submitter_email=user.email if hasattr(user, "email") else user.user_id)
-    # Fire agentic review — non-blocking, passes the OCR'd text path if applicable
-    background_tasks.add_task(run_agentic_review, report_id, review_path, report_type)
+    background_tasks.add_task(run_agentic_review, report_id, file_ref, report_type)
 
     return {
         "report_id": report_id,
@@ -176,20 +152,17 @@ async def view_report_file(
         raise HTTPException(status_code=403, detail="You do not have access to this report")
 
     meta = report.metadata_json or {}
-    file_path = meta.get("file_path")
-    if not file_path or not os.path.exists(file_path):
+    file_ref = meta.get("file_path")
+    if not file_ref or not file_storage.exists(file_ref):
         raise HTTPException(status_code=404, detail="Report file is no longer available")
 
-    suffix = Path(file_path).suffix.lstrip(".").lower()
+    suffix = Path(file_ref).suffix.lstrip(".").lower()
     media_type = MEDIA_TYPES.get(suffix, "application/octet-stream")
-    original_name = meta.get("original_filename", os.path.basename(file_path))
+    original_name = meta.get("original_filename", os.path.basename(file_ref))
+    data = file_storage.load_bytes(file_ref)
 
-    def _stream():
-        with open(file_path, "rb") as f:
-            yield from f
-
-    return StreamingResponse(
-        _stream(),
+    return Response(
+        content=data,
         media_type=media_type,
         headers={"Content-Disposition": f'inline; filename="{original_name}"'},
     )
