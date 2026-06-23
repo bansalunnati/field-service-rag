@@ -19,7 +19,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from app.chat.database import SessionLocal
-from app.chat.models import FieldReport, HITLReview, Notification, User
+from app.chat.models import FieldReport, GroupFileAccess, HITLReview, Notification, UploadedFile, User, UserGroup
 from app.retrieval.retriever import retrieve_with_parent_expansion, retrieve_with_hybrid, get_retriever
 from app.llm.llm_config import llm
 from app.ingestion.text_extraction import extract_text
@@ -202,11 +202,13 @@ Rules for verdict:
 
     elif verdict == "failed":
         _set_status(db, report, "rejected", summary, matched_sources)
+        _grant_template_access(db, report, matched_sources)
         _notify_employee(db, report, "rejected", summary)
         _notify_admins(db, report, "rejected", summary)
 
     else:
         # needs_hitl or any unexpected value — escalate
+        _grant_template_access(db, report, matched_sources)
         _fallback_to_hitl(db, report_id, reason=summary or "AI review was inconclusive.")
 
 
@@ -230,6 +232,47 @@ def _fallback_to_hitl(db: Session, report_id: str, reason: str) -> None:
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _grant_template_access(db: Session, report: FieldReport, matched_sources: list) -> None:
+    """
+    Auto-grants the submitting employee's groups visibility into whichever
+    template/SOP files the reviewer actually judged the report against.
+
+    The reviewer searches every pipeline with no access filtering (it needs
+    full visibility to judge fairly), but employees only get GroupFileAccess
+    to specific admin-granted files. Without this, a report can be rejected
+    citing a document the employee has no way to open themselves — they're
+    stuck guessing at the requirement from the AI's prose summary alone.
+    """
+    if not matched_sources:
+        return
+
+    group_ids = [
+        ug.group_id
+        for ug in db.query(UserGroup).filter(UserGroup.user_id == report.submitted_by).all()
+    ]
+    if not group_ids:
+        return
+
+    files = db.query(UploadedFile).filter(UploadedFile.filename.in_(matched_sources)).all()
+    if not files:
+        return
+
+    existing = {
+        (g.group_id, g.file_id)
+        for g in db.query(GroupFileAccess)
+        .filter(
+            GroupFileAccess.group_id.in_(group_ids),
+            GroupFileAccess.file_id.in_([f.id for f in files]),
+        )
+        .all()
+    }
+    for group_id in group_ids:
+        for f in files:
+            if (group_id, f.id) not in existing:
+                db.add(GroupFileAccess(group_id=group_id, file_id=f.id))
+    db.commit()
+
 
 def _retrieve_templates(query: str, per_pipeline_k: int = 3) -> list:
     """
