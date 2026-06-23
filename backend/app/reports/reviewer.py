@@ -19,7 +19,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from app.chat.database import SessionLocal
-from app.chat.models import FieldReport, GroupFileAccess, HITLReview, Notification, UploadedFile, User, UserGroup
+from app.chat.models import FieldReport, GroupFileAccess, HITLReview, Notification, UploadedFile, User, UserGroup, WorkflowTask
 from app.retrieval.retriever import retrieve_with_parent_expansion, retrieve_with_hybrid, get_retriever
 from app.llm.llm_config import llm
 from app.ingestion.text_extraction import extract_text
@@ -199,6 +199,7 @@ Rules for verdict:
         _set_status(db, report, "approved", summary, matched_sources)
         _notify_employee(db, report, "approved", summary)
         _notify_admins(db, report, "approved", summary)
+        complete_linked_task(db, report)
 
     elif verdict == "failed":
         _set_status(db, report, "rejected", summary, matched_sources)
@@ -232,6 +233,49 @@ def _fallback_to_hitl(db: Session, report_id: str, reason: str) -> None:
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def complete_linked_task(db: Session, report: FieldReport) -> None:
+    """
+    Marks the WorkflowTask this report was submitted for as "done" once the
+    report is approved (auto by the LLM, or manually via the admin HITL
+    decision) — the employee chose that task explicitly at submission time,
+    so an approval is direct evidence the task is finished. Notifies both
+    the employee (their task is now closed) and admins (so they know to
+    assign the employee a new one) — separate from the existing
+    report-approved notification, which only talks about the report.
+    """
+    if not report.task_id:
+        return
+
+    task = db.query(WorkflowTask).filter(WorkflowTask.id == report.task_id).first()
+    if not task or task.status == "done":
+        return
+
+    task.status = "done"
+    task.updated_at = datetime.utcnow()
+    db.commit()
+
+    db.add(Notification(
+        user_id=report.submitted_by,
+        notification_type="task_completed",
+        message=f"Your task '{task.title}' was marked complete now that report '{report.title}' was approved.",
+        ref_type="workflow_task",
+        ref_id=task.id,
+    ))
+    submitter_email = report.submitted_by_user.email if report.submitted_by_user else report.submitted_by
+    for admin_id in [u.id for u in db.query(User).filter(User.role == "admin", User.is_active == True).all()]:
+        db.add(Notification(
+            user_id=admin_id,
+            notification_type="task_completed",
+            message=(
+                f"Report '{report.title}' was approved and task '{task.title}' is now complete. "
+                f"Assign {submitter_email} a new task."
+            ),
+            ref_type="workflow_task",
+            ref_id=task.id,
+        ))
+    db.commit()
+
 
 def _grant_template_access(db: Session, report: FieldReport, matched_sources: list) -> None:
     """

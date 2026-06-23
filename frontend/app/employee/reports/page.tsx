@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Card, CardContent } from "@/components/ui/card";
 import { submitReport, getMyReports, previewReport } from "@/services/reports";
+import { getTasks, Task } from "@/services/tasks";
 import { Upload, Loader2, Eye, MessageCircle } from "lucide-react";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 
@@ -32,7 +33,25 @@ export default function EmployeeReportsPage() {
   const [submitResult, setSubmitResult] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const [previewingId, setPreviewingId] = useState<string | null>(null);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [tasksLoading, setTasksLoading] = useState(true);
+  const [taskId, setTaskId] = useState("");
   const { notify } = useConfirmDialog();
+
+  // Only tasks still in progress are valid things to submit a report
+  // against — once a task is "done" there's nothing left to attach evidence
+  // to, and the AI reviewer needs to know exactly which task a report is
+  // for rather than guessing from file content alone.
+  const activeTasks = tasks.filter((t) => t.status !== "done");
+
+  const loadTasks = async () => {
+    try {
+      const data = await getTasks();
+      setTasks(data);
+    } finally {
+      setTasksLoading(false);
+    }
+  };
 
   const handlePreview = async (id: string) => {
     setPreviewingId(id);
@@ -56,10 +75,15 @@ export default function EmployeeReportsPage() {
 
   useEffect(() => {
     load();
+    loadTasks();
   }, []);
 
   const handleSubmit = async () => {
     const file = fileRef.current?.files?.[0];
+    if (!taskId) {
+      await notify("Choose which task this report is for", { title: "Missing information" });
+      return;
+    }
     if (!title.trim() || !file) {
       await notify("Title and file are required", { title: "Missing information" });
       return;
@@ -70,15 +94,18 @@ export default function EmployeeReportsPage() {
       const fd = new FormData();
       fd.append("title", title);
       fd.append("report_type", reportType);
+      fd.append("task_id", taskId);
       fd.append("file", file);
       await submitReport(fd);
       setTitle("");
       setReportType("other");
+      setTaskId("");
       if (fileRef.current) fileRef.current.value = "";
       setSubmitResult("Report submitted successfully. It is now under review.");
       await load();
-    } catch {
-      setSubmitResult("Submission failed. Please try again.");
+      await loadTasks();
+    } catch (err: any) {
+      setSubmitResult(err?.response?.data?.detail ?? "Submission failed. Please try again.");
     } finally {
       setSubmitting(false);
     }
@@ -91,7 +118,32 @@ export default function EmployeeReportsPage() {
       <Card>
         <CardContent className="p-5">
           <h2 className="font-semibold mb-4">Submit New Report</h2>
+
+          {!tasksLoading && activeTasks.length === 0 ? (
+            <p className="text-sm rounded px-3 py-2 bg-amber-50 text-amber-700">
+              You have no active tasks assigned right now — there's nothing to submit a
+              report for. Ask your admin to assign a task first.
+            </p>
+          ) : (
           <div className="space-y-3">
+            <div>
+              <label className="text-xs text-muted-foreground block mb-1">
+                Which task is this report for?
+              </label>
+              <select
+                value={taskId}
+                onChange={(e) => setTaskId(e.target.value)}
+                disabled={tasksLoading}
+                className="w-full rounded border px-3 py-2 text-sm bg-background"
+              >
+                <option value="">Select an assigned task…</option>
+                {activeTasks.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.title} ({t.status === "in_progress" ? "In Progress" : "Open"})
+                  </option>
+                ))}
+              </select>
+            </div>
             <input
               className="w-full rounded border px-3 py-2 text-sm bg-background"
               placeholder="Report title"
@@ -157,6 +209,7 @@ export default function EmployeeReportsPage() {
               </p>
             )}
           </div>
+          )}
         </CardContent>
       </Card>
 
@@ -192,6 +245,7 @@ export default function EmployeeReportsPage() {
                       {r.submitted_at
                         ? new Date(r.submitted_at).toLocaleDateString()
                         : ""}
+                      {r.task_title && <> · Task: {r.task_title}</>}
                     </p>
                     {r.ai_summary && (
                       <p className="text-xs text-muted-foreground mt-1 italic">

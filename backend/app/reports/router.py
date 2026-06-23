@@ -21,8 +21,8 @@ from sqlalchemy.orm import Session
 
 from app.auth.auth_service import TokenData, get_current_user
 from app.chat.database import get_db
-from app.chat.models import FieldReport, HITLReview, Notification, User
-from app.reports.reviewer import run_agentic_review
+from app.chat.models import FieldReport, HITLReview, Notification, User, WorkflowTask
+from app.reports.reviewer import complete_linked_task, run_agentic_review
 from app.storage import file_storage
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
@@ -74,6 +74,7 @@ async def submit_report(
     background_tasks: BackgroundTasks,
     title:       str        = Form(...),
     report_type: str        = Form(...),   # e.g. "hazmat_inspection", "tower_sop"
+    task_id:     str        = Form(...),   # which assigned WorkflowTask this report is evidence for
     file:        UploadFile = File(...),
     db:          Session    = Depends(get_db),
     user:        TokenData  = Depends(require_employee),
@@ -83,6 +84,9 @@ async def submit_report(
 
     - File is persisted via file_storage (R2 if configured, else local disk
       under REPORTS_DIR) — not ingested into the vector store.
+    - task_id must be one of the employee's own assigned, not-yet-done
+      WorkflowTasks — required so the reviewer/admin knows which task the
+      report is evidence for, instead of guessing from file content alone.
     - A FieldReport record is created with status='under_review'.
     - The agentic reviewer is launched immediately as a background task,
       which also handles OCR if the file needs it (kept out of this
@@ -96,6 +100,12 @@ async def submit_report(
             status_code=400,
             detail=f"Unsupported file type '{suffix}'. Allowed: {sorted(ALLOWED_EXTENSIONS)}",
         )
+
+    task = db.query(WorkflowTask).filter(WorkflowTask.id == task_id).first()
+    if not task or task.assigned_to != user.user_id:
+        raise HTTPException(status_code=404, detail="Task not found or not assigned to you")
+    if task.status == "done":
+        raise HTTPException(status_code=400, detail="That task is already marked done")
 
     contents = await file.read()
 
@@ -112,6 +122,7 @@ async def submit_report(
         content="",
         submitted_by=user.user_id,
         status="under_review",
+        task_id=task_id,
         metadata_json={
             "report_type": report_type,
             "original_filename": file.filename,
@@ -257,6 +268,9 @@ async def hitl_review(
     ))
     db.commit()
 
+    if body.decision == "approved":
+        complete_linked_task(db, report)
+
     return {
         "report_id": report_id,
         "status":    body.decision,
@@ -278,6 +292,8 @@ def _serialize(report: FieldReport, include_submitter: bool = False) -> dict:
         "hitl_reason":  (report.metadata_json or {}).get("hitl_reason", ""),
         "ocr_used":     bool((report.metadata_json or {}).get("ocr_used", False)),
         "matched_sources": (report.metadata_json or {}).get("matched_sources", []),
+        "task_id":      report.task_id,
+        "task_title":   report.task.title if report.task else None,
     }
     if include_submitter and report.submitted_by_user:
         out["submitted_by"] = report.submitted_by_user.email

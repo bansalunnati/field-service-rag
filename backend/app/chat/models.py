@@ -215,10 +215,20 @@ class FieldReport(Base):
     updated_at    = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     file_path    = Column(String, nullable=True)   # path to the uploaded file on disk
     report_type  = Column(String, nullable=True)   # e.g. "hazmat_inspection", "tower_sop"
-    
-    submitted_by_user = relationship("User",back_populates="field_reports")
+    # Which assigned WorkflowTask this report is evidence for — chosen by the
+    # employee at submission time. Distinct from WorkflowTask.report_id below
+    # (a task auto-generated FROM an approved report); this is the inverse:
+    # a report submitted FOR an existing task, so the reviewer/admin knows
+    # which task to mark complete instead of guessing from file content alone.
+    task_id      = Column(String, ForeignKey("workflow_tasks.id"), nullable=True, index=True)
+
+    submitted_by_user = relationship("User", back_populates="field_reports")
     hitl_review       = relationship("HITLReview",   back_populates="report", uselist=False)
-    workflow_tasks    = relationship("WorkflowTask", back_populates="report", cascade="all, delete-orphan")
+    workflow_tasks    = relationship(
+        "WorkflowTask", back_populates="report", cascade="all, delete-orphan",
+        foreign_keys="WorkflowTask.report_id",
+    )
+    task = relationship("WorkflowTask", foreign_keys=[task_id])
 
 
 class HITLReview(Base):
@@ -263,7 +273,10 @@ class WorkflowTask(Base):
     created_at  = Column(DateTime, default=datetime.utcnow)
     updated_at  = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    report           = relationship("FieldReport", back_populates="workflow_tasks")
+    report           = relationship(
+        "FieldReport", back_populates="workflow_tasks",
+        foreign_keys=[report_id],
+    )
     assigned_to_user = relationship("User",        back_populates="assigned_tasks")
 
 

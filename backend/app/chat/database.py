@@ -34,7 +34,7 @@ def init_db():
     # Each migration is independently best-effort: a stuck lock or transient
     # DB error here should never prevent the app from starting and binding
     # its port — that turns a 5-second DDL hiccup into a full deploy timeout.
-    for migration in (_migrate_query_log_fk, _migrate_uploaded_files_status):
+    for migration in (_migrate_query_log_fk, _migrate_uploaded_files_status, _migrate_field_reports_task_id):
         try:
             migration()
         except Exception as exc:
@@ -100,6 +100,28 @@ def _migrate_uploaded_files_status():
         conn.execute(text(
             "ALTER TABLE uploaded_files ADD COLUMN IF NOT EXISTS error_message TEXT"
         ))
+
+
+def _migrate_field_reports_task_id():
+    """
+    Adds field_reports.task_id — lets an employee declare which assigned
+    WorkflowTask a submitted report is evidence for, instead of leaving the
+    reviewer to guess from file content alone. create_all() only creates
+    tables that don't exist yet, so this column needs adding by hand on an
+    already-deployed field_reports table.
+    """
+    from sqlalchemy import text
+    with engine.begin() as conn:
+        if DATABASE_URL.startswith("postgresql"):
+            conn.execute(text("SET lock_timeout = '5s'"))
+            conn.execute(text(
+                "ALTER TABLE field_reports ADD COLUMN IF NOT EXISTS task_id VARCHAR REFERENCES workflow_tasks(id)"
+            ))
+        else:
+            # SQLite has no "ADD COLUMN IF NOT EXISTS" — check first.
+            cols = [row[1] for row in conn.execute(text("PRAGMA table_info(field_reports)"))]
+            if "task_id" not in cols:
+                conn.execute(text("ALTER TABLE field_reports ADD COLUMN task_id VARCHAR"))
 
 
 def get_db():
