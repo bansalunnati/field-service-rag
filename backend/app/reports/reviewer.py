@@ -34,6 +34,14 @@ from app.storage import file_storage
 # actual document — which is the bug being fixed here.
 ALL_PIPELINES = ["field_reports", "safety", "equipment"]
 
+# Below this average Tesseract word-confidence, checkbox marks (✓) and
+# cursive/handwritten notes routinely don't survive OCR at all — the LLM
+# then sees component names with no recorded result and wrongly concludes
+# the checklist is "missing", when a human looking at the same scan would
+# see it filled in. Escalate to a human instead of auto-rejecting on text
+# we already know is unreliable.
+OCR_CONFIDENCE_HITL_THRESHOLD = float(os.getenv("OCR_CONFIDENCE_HITL_THRESHOLD", "60"))
+
 
 def run_agentic_review(report_id: str, file_ref: str, report_type: str) -> None:
     """
@@ -70,12 +78,32 @@ def _review(db: Session, report_id: str, file_path: str, report_type: str) -> No
 
     # Step 1 — Extract text from the uploaded file (OCR'd here if needed —
     # this is the background task, so slow OCR doesn't block the submit request)
-    submitted_text, ocr_used = extract_text(file_path)
-    report.metadata_json = {**(report.metadata_json or {}), "ocr_used": ocr_used}
+    submitted_text, ocr_used, ocr_confidence = extract_text(file_path)
+    report.metadata_json = {
+        **(report.metadata_json or {}),
+        "ocr_used": ocr_used,
+        "ocr_confidence": ocr_confidence,
+    }
     db.commit()
 
     if not submitted_text.strip():
         _fallback_to_hitl(db, report_id, reason="Could not extract text from the uploaded file.")
+        return
+
+    if ocr_used and ocr_confidence is not None and ocr_confidence < OCR_CONFIDENCE_HITL_THRESHOLD:
+        # Don't even ask the LLM to judge this — low-confidence OCR text is
+        # missing or garbled information (most commonly checkbox/tick marks
+        # and handwritten/cursive notes), so any verdict built on it would be
+        # judging incomplete data, not the actual report.
+        _fallback_to_hitl(
+            db, report_id,
+            reason=(
+                f"OCR confidence was low ({ocr_confidence:.0f}%) — checkboxes, "
+                f"ticks, or handwritten notes may not have been read correctly. "
+                f"A human should review the original scan directly rather than "
+                f"trust the extracted text."
+            ),
+        )
         return
 
     # Step 2 — Retrieve the relevant template/SOP from across every pipeline,
@@ -121,9 +149,25 @@ GROUNDING RULE (most important):
   otherwise insufficient to judge the submission against, you MUST return
   "needs_hitl" and say so in the summary — do not guess.
 
+EQUIVALENCE RULE (just as important):
+- The submitted report came from OCR. It will almost never use the same
+  words as the template. Checkbox/tick marks (✓) are usually lost entirely
+  by OCR, and results are often expressed as informal free text instead of
+  formal labels — e.g. "sounds fine, pressure ok" means PASS/OK, "a little
+  low - need to recheck" means LOW/minor issue, "very dirty!! replaced w/
+  AF-3381" means FAIL-then-corrected, not "blank".
+- Judge substance, not wording. If a component is discussed with a clear
+  outcome in the submitted text — even informally, even without the literal
+  word the template uses — treat that requirement as satisfied. Only flag a
+  field as missing if the submission truly says nothing about it at all.
+- Do not fail a report merely because its format (checkbox table vs.
+  PASS/FAIL column) differs from the template's format.
+
 EVALUATION CRITERIA (apply only using the reference text above as the source of truth):
-1. Every mandatory field or section named in the reference must be present in the submission.
-2. Observations, readings, or checklist items must be recorded (not left blank or marked N/A without justification).
+1. Every mandatory field or section named in the reference must be discussed
+   in the submission in substance — exact formatting or wording is not required.
+2. Observations, readings, or checklist items must have a discernible outcome
+   (not left blank or marked N/A without justification).
 3. No obvious internal inconsistencies (e.g. date mismatch, site ID mismatch, contradictory readings).
 4. Signature or technician ID must be present, if the reference requires one.
 

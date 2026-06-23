@@ -294,7 +294,7 @@ async def upload_chat_file(
                     ),
                 )
 
-        text, _ocr_used = extract_text(local_path)
+        text, _ocr_used, _ocr_confidence = extract_text(local_path)
     finally:
         os.unlink(local_path)
         file_storage.delete(ref)
