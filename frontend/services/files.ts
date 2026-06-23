@@ -14,3 +14,11 @@ export const uploadFile = async (file: File, pipeline: string) => {
   });
   return res.data;
 };
+
+export const previewFile = async (fileId: string) => {
+  const res = await api.get(`/api/ingest/files/${fileId}/view`, {
+    responseType: "blob",
+  });
+  const url = URL.createObjectURL(res.data);
+  window.open(url, "_blank", "noopener,noreferrer");
+};

@@ -35,11 +35,10 @@ export const sendMessage = async (
 export const uploadChatFile = async (sessionId: string, file: File) => {
   const formData = new FormData();
   formData.append("file", file);
-  const res = await api.post(
-    `/api/chat/sessions/${sessionId}/upload`,
-    formData,
-    { headers: { "Content-Type": "multipart/form-data" } }
-  );
+  // Don't set Content-Type manually — axios needs to generate the
+  // multipart boundary itself from the FormData body; a hardcoded
+  // "multipart/form-data" header with no boundary breaks parsing server-side.
+  const res = await api.post(`/api/chat/sessions/${sessionId}/upload`, formData);
   return res.data as { filename: string; extracted_text: string };
 };
 

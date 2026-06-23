@@ -2,8 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
-import { getFiles, uploadFile } from "@/services/files";
-import { Upload, FileText, ToggleLeft, ToggleRight, Loader2, Trash2 } from "lucide-react";
+import { getFiles, uploadFile, previewFile } from "@/services/files";
+import { Upload, FileText, ToggleLeft, ToggleRight, Loader2, Trash2, Eye } from "lucide-react";
 import api from "@/lib/api";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 
@@ -32,6 +32,21 @@ export default function DocumentsPage() {
   const fileRef = useRef<HTMLInputElement>(null);
   const { confirm, notify } = useConfirmDialog();
   const [retryingId, setRetryingId] = useState<string | null>(null);
+  const [previewingId, setPreviewingId] = useState<string | null>(null);
+
+  const handlePreview = async (id: string) => {
+    setPreviewingId(id);
+    try {
+      await previewFile(id);
+    } catch (err: any) {
+      await notify(err?.response?.data?.detail ?? "Preview failed. The file may no longer be available.", {
+        title: "Preview failed",
+        destructive: true,
+      });
+    } finally {
+      setPreviewingId(null);
+    }
+  };
 
   const handleRetry = async (id: string) => {
     setRetryingId(id);
@@ -271,13 +286,27 @@ export default function DocumentsPage() {
                         </button>
                       </td>
                       <td className="py-2">
-                        <button
-                          onClick={() => handleDelete(f.id, f.original_name)}
-                          title="Delete file"
-                          className="text-muted-foreground hover:text-destructive transition"
-                        >
-                          <Trash2 size={14} />
-                        </button>
+                        <div className="flex items-center gap-3">
+                          <button
+                            onClick={() => handlePreview(f.id)}
+                            disabled={previewingId === f.id}
+                            title="Preview file"
+                            className="text-muted-foreground hover:text-primary transition disabled:opacity-50"
+                          >
+                            {previewingId === f.id ? (
+                              <Loader2 size={14} className="animate-spin" />
+                            ) : (
+                              <Eye size={14} />
+                            )}
+                          </button>
+                          <button
+                            onClick={() => handleDelete(f.id, f.original_name)}
+                            title="Delete file"
+                            className="text-muted-foreground hover:text-destructive transition"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
