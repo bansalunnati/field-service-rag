@@ -143,3 +143,7 @@ pgvector==0.3.6
 
 # ── Phase 12: object storage — persists uploaded files/reports across restarts ──
 boto3==1.34.144
+
+# ── Field Service Report processing pipeline (LangGraph + DeepEval) ────────────
+deepeval==4.0.7
+langgraph-checkpoint-sqlite==3.1.0
