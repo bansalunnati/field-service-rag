@@ -112,7 +112,8 @@ export default function ChatWindow({
                 ref={fileInputRef}
                 type="file"
                 className="hidden"
-                accept=".pdf,.docx,.txt,.md,.png,.jpg,.jpeg"
+                accept=".pdf,.docx,.txt,.md"
+                title="PDF, DOCX, TXT, or MD with selectable text — scanned/image files need OCR and aren't supported here; submit those as a Field Report instead"
                 onChange={(e) => {
                   const file = e.target.files?.[0];
                   if (file) onAttachFile(file);

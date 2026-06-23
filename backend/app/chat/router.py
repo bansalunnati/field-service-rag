@@ -261,13 +261,39 @@ async def upload_chat_file(
     if not file:
         raise HTTPException(status_code=422, detail="No file provided.")
 
-    suffix = os.path.splitext(file.filename or "")[1]
+    suffix = os.path.splitext(file.filename or "")[1].lower()
     key = f"chat_uploads/{session_id}/{uuid.uuid4()}{suffix}"
     data = await file.read()
     ref = file_storage.save_bytes(key, data)
 
     local_path = file_storage.download_to_tempfile(ref, suffix=suffix)
     try:
+        # OCR (images, scanned PDFs) can take up to OCR_TIMEOUT_SECONDS — fine
+        # for report submission, which runs it as a BackgroundTask, but this
+        # endpoint extracts inline within the request, so it would just time
+        # out. Detect the OCR case up front and fail fast with a clear
+        # message instead of hanging until the proxy/browser gives up.
+        if suffix in {".png", ".jpg", ".jpeg"}:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Image attachments need OCR, which is too slow to run inline "
+                    "in chat. Submit it as a Field Report instead — OCR runs in "
+                    "the background there."
+                ),
+            )
+        if suffix == ".pdf":
+            from app.ingestion.ocr_service import is_scanned_pdf
+            if is_scanned_pdf(local_path):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "This looks like a scanned PDF, which needs OCR — too slow "
+                        "to run inline in chat. Submit it as a Field Report instead, "
+                        "or attach a PDF with selectable text."
+                    ),
+                )
+
         text, _ocr_used = extract_text(local_path)
     finally:
         os.unlink(local_path)
