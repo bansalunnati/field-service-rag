@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Card, CardContent } from "@/components/ui/card";
 import { submitReport, getMyReports, previewReport } from "@/services/reports";
-import { Upload, Loader2, Eye } from "lucide-react";
+import { Upload, Loader2, Eye, MessageCircle } from "lucide-react";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 
 const STATUS_STYLES: Record<string, string> = {
@@ -22,6 +23,7 @@ const REPORT_TYPES: { value: string; label: string }[] = [
 ];
 
 export default function EmployeeReportsPage() {
+  const router = useRouter();
   const [reports, setReports] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -223,6 +225,16 @@ export default function EmployeeReportsPage() {
                       )}
                       Preview
                     </button>
+                    {(r.status === "rejected" || r.status === "needs_hitl") && (
+                      <button
+                        onClick={() => router.push(`/employee/chat?reportId=${r.id}`)}
+                        title="Discuss this report's rejection in Policy Chat"
+                        className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition"
+                      >
+                        <MessageCircle size={14} />
+                        Discuss in Policy Chat
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}

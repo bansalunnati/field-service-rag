@@ -18,10 +18,12 @@ Access Rules:
     - Employees can only query pipelines granted to their groups.
 """
 
+import os
 import time
+import uuid
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -36,8 +38,10 @@ from app.chat.history_service import (
     get_session,
     get_sessions,
 )
-from app.chat.models import FileAccess, GroupFileAccess, QueryLog, UploadedFile, UserGroup
+from app.chat.models import FieldReport, FileAccess, GroupFileAccess, QueryLog, UploadedFile, UserGroup
+from app.ingestion.text_extraction import extract_text
 from app.retrieval.rag_pipeline import ask_question_across_pipelines
+from app.storage import file_storage
 
 
 router = APIRouter(
@@ -60,6 +64,11 @@ class SessionCreate(BaseModel):
 class QueryRequest(BaseModel):
     question: str
     pipeline: Optional[str] = None
+    attached_text: Optional[str] = None
+    attached_filename: Optional[str] = None
+
+
+ATTACHED_TEXT_LIMIT = 8000
 
 
 # ============================================================================
@@ -200,6 +209,77 @@ async def session_messages(
 
 
 # ============================================================================
+# Upload Endpoint
+# ============================================================================
+
+@router.post("/sessions/{session_id}/upload")
+async def upload_chat_file(
+    session_id: str,
+    file: Optional[UploadFile] = File(default=None),
+    report_id: Optional[str] = Query(default=None),
+    db: Session = Depends(get_db),
+    user: TokenData = Depends(require_permission("query")),
+):
+    """
+    Ad-hoc attachment for a single chat turn — extracts text and hands it
+    back to the frontend to send alongside the next /query call. Nothing is
+    ingested into the shared vector store and nothing is persisted in the DB;
+    the bytes are written to object storage / disk only long enough to run
+    the same extraction reviewer.py uses, then discarded.
+
+    If `report_id` is given (employee opening "Discuss in Policy Chat" from
+    one of their own rejected reports), the employee's own report text and
+    the AI reviewer's already-computed verdict/matched templates are
+    returned instead of re-extracting the uploaded file.
+    """
+    session = get_session(db, session_id, user.user_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if report_id:
+        report = (
+            db.query(FieldReport)
+            .filter(FieldReport.id == report_id, FieldReport.submitted_by == user.user_id)
+            .first()
+        )
+        if not report:
+            raise HTTPException(status_code=404, detail="Report not found")
+
+        meta = report.metadata_json or {}
+        parts = [f"Report title: {report.title}", f"Report status: {report.status}"]
+        if meta.get("ai_summary"):
+            parts.append(f"AI review summary: {meta['ai_summary']}")
+        if meta.get("hitl_reason"):
+            parts.append(f"Rejection reason: {meta['hitl_reason']}")
+        if meta.get("matched_sources"):
+            parts.append(f"Matched template/SOP documents: {', '.join(meta['matched_sources'])}")
+        parts.append(f"Report content:\n{report.content}")
+
+        extracted_text = "\n\n".join(parts)[:ATTACHED_TEXT_LIMIT]
+        return {"filename": report.title, "extracted_text": extracted_text}
+
+    if not file:
+        raise HTTPException(status_code=422, detail="No file provided.")
+
+    suffix = os.path.splitext(file.filename or "")[1]
+    key = f"chat_uploads/{session_id}/{uuid.uuid4()}{suffix}"
+    data = await file.read()
+    ref = file_storage.save_bytes(key, data)
+
+    local_path = file_storage.download_to_tempfile(ref, suffix=suffix)
+    try:
+        text, _ocr_used = extract_text(local_path)
+    finally:
+        os.unlink(local_path)
+        file_storage.delete(ref)
+
+    if not text.strip():
+        raise HTTPException(status_code=422, detail="Could not extract text from this file.")
+
+    return {"filename": file.filename, "extracted_text": text[:ATTACHED_TEXT_LIMIT]}
+
+
+# ============================================================================
 # Query Endpoint
 # ============================================================================
 
@@ -267,6 +347,8 @@ async def query(
             pipelines=pipelines,
             history=history,
             allowed_file_ids_by_pipeline=allowed_file_ids_by_pipeline,
+            attached_text=body.attached_text,
+            attached_filename=body.attached_filename,
         )
     except Exception as exc:
         error_text = str(exc)

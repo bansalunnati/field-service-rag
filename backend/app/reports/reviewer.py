@@ -22,7 +22,7 @@ from app.chat.database import SessionLocal
 from app.chat.models import FieldReport, HITLReview, Notification, User
 from app.retrieval.retriever import retrieve_with_parent_expansion, retrieve_with_hybrid, get_retriever
 from app.llm.llm_config import llm
-from app.ingestion.document_loader import _load_pdf, _load_docx, _load_txt
+from app.ingestion.text_extraction import extract_text
 from app.storage import file_storage
 
 # Templates/checklists/SOPs an admin uploads can live in any pipeline —
@@ -70,7 +70,7 @@ def _review(db: Session, report_id: str, file_path: str, report_type: str) -> No
 
     # Step 1 — Extract text from the uploaded file (OCR'd here if needed —
     # this is the background task, so slow OCR doesn't block the submit request)
-    submitted_text, ocr_used = _extract_text(file_path)
+    submitted_text, ocr_used = extract_text(file_path)
     report.metadata_json = {**(report.metadata_json or {}), "ocr_used": ocr_used}
     db.commit()
 
@@ -207,31 +207,6 @@ def _retrieve_templates(query: str, per_pipeline_k: int = 3) -> list:
             pipeline_docs = []
         docs.extend(pipeline_docs)
     return docs
-
-
-def _extract_text(file_path: str) -> tuple[str, bool]:
-    """Returns (extracted_text, ocr_used)."""
-    ext = os.path.splitext(file_path)[1].lower()
-
-    if ext in {".png", ".jpg", ".jpeg"}:
-        from app.ingestion.ocr_service import extract_text_from_image
-        text, _ = extract_text_from_image(file_path)
-        return text, True
-
-    if ext == ".pdf":
-        from app.ingestion.ocr_service import is_scanned_pdf, extract_text_from_scanned_pdf
-        if is_scanned_pdf(file_path):
-            text, _ = extract_text_from_scanned_pdf(file_path)
-            return text, True
-        docs = _load_pdf(file_path)
-        return "\n\n".join(d.page_content for d in docs), False
-
-    loader_map = {".docx": _load_docx, ".txt": _load_txt, ".md": _load_txt}
-    loader = loader_map.get(ext)
-    if not loader:
-        return "", False
-    docs = loader(file_path)
-    return "\n\n".join(d.page_content for d in docs), False
 
 
 def _parse_verdict(raw: str) -> tuple:

@@ -128,6 +128,8 @@ def ask_question_across_pipelines(
     pipelines: List[str],
     history: Optional[List[Dict[str, str]]] = None,
     allowed_file_ids_by_pipeline: Optional[Dict[str, Optional[List[str]]]] = None,
+    attached_text: Optional[str] = None,
+    attached_filename: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Unified RAG — retrieves from every pipeline the caller can access and
@@ -140,6 +142,10 @@ def ask_question_across_pipelines(
         history   : Recent conversation turns (role + content dicts).
         allowed_file_ids_by_pipeline : Per-pipeline file-id allowlist for
                     employees (None per pipeline means admin/no restriction).
+        attached_text, attached_filename : An ad-hoc file the employee attached
+                    to this turn (e.g. their own rejected report) — not stored
+                    in the vector store, just prepended to this prompt's
+                    reference block so the model can quote/explain it.
 
     Returns:
         Same shape as ask_question_with_citations.
@@ -155,7 +161,7 @@ def ask_question_across_pipelines(
         allowed = allowed_file_ids_by_pipeline.get(p)
         docs.extend(_retrieve_docs(question, p, allowed, top_k=per_pipeline_k))
 
-    if not docs:
+    if not docs and not attached_text:
         return {
             "answer": (
                 "I could not find that information in the documents available to you. "
@@ -166,6 +172,11 @@ def ask_question_across_pipelines(
         }
 
     ref_block   = _build_ref_block(docs)
+    if attached_text:
+        attached_block = (
+            f"[UPLOADED FILE: {attached_filename or 'attachment'}]\n{attached_text}\n"
+        )
+        ref_block = f"{attached_block}\n{ref_block}" if ref_block else attached_block
     history_str = _build_history_str(history)
 
     prompt = f"""You are an AI assistant for a Utilities and Facility Management team.

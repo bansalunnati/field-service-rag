@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import ChatWindow from "@/components/chat/ChatWindow";
 import HistorySidebar from "@/components/chat/HistorySidebar";
 import {
@@ -9,8 +10,15 @@ import {
   getSessions,
   getMessages,
   deleteSession,
+  uploadChatFile,
+  attachReportToChat,
 } from "@/services/chat";
 import api from "@/lib/api";
+
+interface AttachedFile {
+  filename: string;
+  extracted_text: string;
+}
 
 function extractErrorMessage(err: unknown): string {
   if (err && typeof err === "object" && "response" in err) {
@@ -27,12 +35,23 @@ function extractErrorMessage(err: unknown): string {
 }
 
 export default function EmployeeChatPage() {
+  return (
+    <Suspense fallback={null}>
+      <EmployeeChatPageInner />
+    </Suspense>
+  );
+}
+
+function EmployeeChatPageInner() {
+  const searchParams = useSearchParams();
   const [sessions, setSessions] = useState<any[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<any[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [noAccess, setNoAccess] = useState(false);
+  const [attachedFile, setAttachedFile] = useState<AttachedFile | null>(null);
+  const [attaching, setAttaching] = useState(false);
 
   const loadSessions = async () => {
     try {
@@ -58,24 +77,31 @@ export default function EmployeeChatPage() {
     } catch {}
   };
 
-  const handleSend = async () => {
-    if (!input.trim() || loading || noAccess) return;
+  const handleSend = async (questionOverride?: string) => {
+    const userMsg = (questionOverride ?? input).trim();
+    if (!userMsg || loading || noAccess) return;
     setLoading(true);
 
     let sid = sessionId;
+    const attachment = attachedFile;
     try {
       if (!sid) {
-        const session = await createSession("safety", input.slice(0, 40));
+        const session = await createSession("safety", userMsg.slice(0, 40));
         sid = session.id;
         setSessionId(sid);
         await loadSessions();
       }
 
-      const userMsg = input;
       setInput("");
+      setAttachedFile(null);
       setMessages((prev) => [...prev, { role: "user", content: userMsg }]);
 
-      const result = await sendMessage(sid!, userMsg);
+      const result = await sendMessage(
+        sid!,
+        userMsg,
+        attachment?.extracted_text,
+        attachment?.filename
+      );
       setMessages((prev) => [
         ...prev,
         {
@@ -97,6 +123,26 @@ export default function EmployeeChatPage() {
     }
   };
 
+  const handleAttachFile = async (file: File) => {
+    setAttaching(true);
+    try {
+      let sid = sessionId;
+      if (!sid) {
+        const session = await createSession("safety", `Re: ${file.name}`);
+        sid = session.id;
+        setSessionId(sid);
+        await loadSessions();
+      }
+      const result = await uploadChatFile(sid!, file);
+      setAttachedFile(result);
+    } catch (err) {
+      const msg = extractErrorMessage(err);
+      setMessages((prev) => [...prev, { role: "assistant", content: msg, citations: [] }]);
+    } finally {
+      setAttaching(false);
+    }
+  };
+
   const handleDeleteSession = async (id: string) => {
     await deleteSession(id);
     await loadSessions();
@@ -108,6 +154,46 @@ export default function EmployeeChatPage() {
   };
 
   useEffect(() => { loadSessions(); }, []);
+
+  // "Discuss in Policy Chat" from a rejected report deep-links here with
+  // ?reportId=... — auto-create a session, pre-attach the report's own
+  // content + matched templates, and ask the obvious opening question.
+  useEffect(() => {
+    const reportId = searchParams.get("reportId");
+    if (!reportId) return;
+
+    (async () => {
+      setAttaching(true);
+      setLoading(true);
+      try {
+        const session = await createSession("safety", "Why was my report rejected?");
+        setSessionId(session.id);
+        await loadSessions();
+
+        const attachment = await attachReportToChat(session.id, reportId);
+        const question = "Why was this report rejected and what does the template require?";
+        setMessages((prev) => [...prev, { role: "user", content: question }]);
+
+        const result = await sendMessage(
+          session.id,
+          question,
+          attachment.extracted_text,
+          attachment.filename
+        );
+        setMessages((prev) => [
+          ...prev,
+          { role: "assistant", content: result.answer, citations: result.citations },
+        ]);
+      } catch (err) {
+        const msg = extractErrorMessage(err);
+        setMessages((prev) => [...prev, { role: "assistant", content: msg, citations: [] }]);
+      } finally {
+        setAttaching(false);
+        setLoading(false);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div className="flex flex-col h-[calc(100vh-8rem)] gap-0">
@@ -139,10 +225,14 @@ export default function EmployeeChatPage() {
             messages={messages}
             inputValue={input}
             onInputChange={setInput}
-            onSend={handleSend}
+            onSend={() => handleSend()}
             loading={loading}
             placeholder={noAccess ? "No pipeline access — contact your admin" : "Ask a policy question…"}
             disabled={noAccess}
+            attachedFile={attachedFile}
+            onAttachFile={handleAttachFile}
+            onRemoveAttachment={() => setAttachedFile(null)}
+            attaching={attaching}
           />
         </div>
       </div>

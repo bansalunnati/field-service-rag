@@ -2,13 +2,18 @@
 
 import { useEffect, useRef } from "react";
 import CitationCard from "./CitationCard";
-import { Loader2, Send } from "lucide-react";
+import { Loader2, Send, Paperclip, X } from "lucide-react";
 
 interface Message {
   id?: string;
   role: "user" | "assistant";
   content: string;
   citations?: any[];
+}
+
+interface AttachedFile {
+  filename: string;
+  extracted_text: string;
 }
 
 interface ChatWindowProps {
@@ -19,6 +24,10 @@ interface ChatWindowProps {
   loading: boolean;
   placeholder?: string;
   disabled?: boolean;
+  attachedFile?: AttachedFile | null;
+  onAttachFile?: (file: File) => void;
+  onRemoveAttachment?: () => void;
+  attaching?: boolean;
 }
 
 export default function ChatWindow({
@@ -29,7 +38,12 @@ export default function ChatWindow({
   loading,
   placeholder = "Ask a question…",
   disabled = false,
+  attachedFile = null,
+  onAttachFile,
+  onRemoveAttachment,
+  attaching = false,
 }: ChatWindowProps) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -78,8 +92,43 @@ export default function ChatWindow({
       </div>
 
       {/* Input bar */}
-      <div className="border-t p-3">
+      <div className="border-t p-3 space-y-2">
+        {attachedFile && (
+          <div className="flex items-center gap-2 rounded-lg border bg-muted px-3 py-1.5 text-xs w-fit">
+            <Paperclip size={12} />
+            <span className="truncate max-w-[200px]">{attachedFile.filename}</span>
+            <button
+              onClick={onRemoveAttachment}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <X size={12} />
+            </button>
+          </div>
+        )}
         <div className="flex items-center gap-2 rounded-xl border bg-background px-3 py-2 focus-within:ring-2 focus-within:ring-primary/30">
+          {onAttachFile && (
+            <>
+              <input
+                ref={fileInputRef}
+                type="file"
+                className="hidden"
+                accept=".pdf,.docx,.txt,.md,.png,.jpg,.jpeg"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) onAttachFile(file);
+                  e.target.value = "";
+                }}
+              />
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={disabled || attaching}
+                className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground disabled:opacity-40 transition"
+                title="Attach a file"
+              >
+                {attaching ? <Loader2 size={14} className="animate-spin" /> : <Paperclip size={14} />}
+              </button>
+            </>
+          )}
           <input
             className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
             placeholder={placeholder}
