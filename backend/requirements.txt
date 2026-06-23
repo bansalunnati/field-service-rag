@@ -13,7 +13,7 @@ cachetools==7.1.4
 certifi==2026.5.20
 charset-normalizer==3.4.7
 chromadb==1.5.9
-click==8.4.1
+click==8.3.3
 colorama==0.4.6
 distro==1.9.0
 durationpy==0.10
@@ -30,7 +30,7 @@ httpcore==1.0.9
 httptools==0.8.0
 httpx==0.28.1
 httpx-sse==0.4.3
-huggingface_hub==1.16.4
+huggingface_hub==0.36.2
 idna==3.16
 importlib_resources==7.1.0
 itsdangerous==2.2.0
@@ -95,7 +95,7 @@ regex==2026.5.9
 requests==2.34.2
 requests-oauthlib==2.0.0
 requests-toolbelt==1.0.0
-rich==15.0.0
+rich==14.3.4
 rpds-py==0.30.0
 safetensors==0.7.0
 scikit-learn==1.8.0
