@@ -172,6 +172,7 @@ export default function AdminTasksPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b text-left text-muted-foreground">
+                    <th className="pb-2 font-medium">ID</th>
                     <th className="pb-2 font-medium">Title</th>
                     <th className="pb-2 font-medium">Assigned To</th>
                     <th className="pb-2 font-medium">Priority</th>
@@ -183,6 +184,16 @@ export default function AdminTasksPage() {
                 <tbody className="divide-y">
                   {tasks.map((t: any) => (
                     <tr key={t.id} className="hover:bg-muted/40 transition">
+                      <td className="py-2.5">
+                        <button
+                          type="button"
+                          title={`Click to copy full ID: ${t.id}`}
+                          onClick={() => navigator.clipboard?.writeText(t.id)}
+                          className="font-mono text-xs text-muted-foreground hover:text-foreground cursor-pointer"
+                        >
+                          {t.id?.slice(0, 8)}
+                        </button>
+                      </td>
                       <td className="py-2.5">
                         <p className="font-medium truncate max-w-xs">{t.title}</p>
                         {t.description && (
