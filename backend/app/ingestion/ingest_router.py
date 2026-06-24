@@ -24,6 +24,7 @@ from app.chat.models import UploadedFile
 from app.auth.auth_service import require_permission, TokenData
 from app.ingestion.ingest_documents import ingest_single_file
 from app.ingestion.document_loader import _detect_pipeline
+from app.ingestion.vector_store import delete_documents_by_file_id
 from app.retrieval.retriever import invalidate_bm25_cache
 from app.storage import file_storage
 
@@ -348,11 +349,13 @@ async def delete_uploaded_file(
     db: Session = Depends(get_db),
     user: TokenData = Depends(require_admin),
 ):
-    """Delete a file record and its stored copy (admin only)."""
+    """Delete a file record, its stored copy, and its embedded chunks (admin only)."""
     file = db.query(UploadedFile).filter(UploadedFile.id == file_id).first()
     if not file:
         raise HTTPException(status_code=404, detail="File not found")
     file_storage.delete(file.file_path)
+    delete_documents_by_file_id(file_id, file.pipeline)
+    invalidate_bm25_cache(file.pipeline)
     db.delete(file)
     db.commit()
 

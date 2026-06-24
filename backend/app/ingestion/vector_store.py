@@ -83,6 +83,7 @@ def create_vector_store(chunks: List[Document], pipeline: str = "field_reports")
             embedding=get_embedding_model(),
             persist_directory=CHROMA_BASE_DIR,
             collection_name=collection_name,
+            collection_metadata={"hnsw:space": "cosine"},
         )
 
     print(f"  Stored {len(chunks)} chunks → collection: '{collection_name}' ({'pgvector' if USE_PGVECTOR else 'chroma'})")
@@ -113,6 +114,7 @@ def get_vector_store(pipeline: str = "field_reports"):
         persist_directory=CHROMA_BASE_DIR,
         embedding_function=get_embedding_model(),
         collection_name=collection_name,
+        collection_metadata={"hnsw:space": "cosine"},
     )
 
 
@@ -141,6 +143,42 @@ def get_all_documents(pipeline: str = "field_reports") -> List[Document]:
     raw_docs = result.get("documents", [])
     metas = result.get("metadatas", []) or [{}] * len(raw_docs)
     return [Document(page_content=t, metadata=m) for t, m in zip(raw_docs, metas)]
+
+
+def delete_documents_by_file_id(file_id: str, pipeline: str) -> int:
+    """
+    Removes every chunk tagged with this file_id from its pipeline's collection.
+
+    Called when an admin deletes an UploadedFile — without this, the original
+    file disappears from the file manager but its embedded chunks keep being
+    retrieved and quoted in chat answers forever.
+
+    Returns the number of chunks removed.
+    """
+    vector_store = get_vector_store(pipeline)
+
+    if USE_PGVECTOR:
+        with vector_store._make_session() as session:
+            collection = vector_store.get_collection(session)
+            if not collection:
+                return 0
+            rows = (
+                session.query(vector_store.EmbeddingStore)
+                .filter(vector_store.EmbeddingStore.collection_id == collection.uuid)
+                .filter(vector_store.EmbeddingStore.cmetadata["file_id"].astext == file_id)
+                .all()
+            )
+            count = len(rows)
+            for row in rows:
+                session.delete(row)
+            session.commit()
+            return count
+
+    matches = vector_store._collection.get(where={"file_id": file_id}, include=[])
+    ids = matches.get("ids", [])
+    if ids:
+        vector_store._collection.delete(ids=ids)
+    return len(ids)
 
 
 def list_collection_names() -> List[str]:
