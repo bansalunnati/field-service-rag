@@ -12,17 +12,47 @@ except ImportError:
 _bm25_cache: dict = {}
 
 
+def _active_file_ids() -> Optional[set]:
+    """
+    File IDs an admin has marked active. Toggling a file inactive (Admin →
+    Documents) takes it out of RAG retrieval without deleting it, so it
+    stops influencing chat answers and HITL template matching.
+    Returns None if the lookup fails open (never block retrieval on a DB error).
+    """
+    from app.chat.database import SessionLocal
+    from app.chat.models import UploadedFile
+    db = SessionLocal()
+    try:
+        rows = db.query(UploadedFile.id).filter(
+            (UploadedFile.is_active == True) | (UploadedFile.is_active.is_(None))
+        ).all()
+        return {r[0] for r in rows}
+    except Exception:
+        return None
+    finally:
+        db.close()
+
+
 def _file_filter(allowed_file_ids: Optional[List[str]], extra: Optional[dict] = None) -> Optional[dict]:
     """
-    Builds a ChromaDB `where` filter that restricts results to allowed files.
-    - None → no filter (admin sees everything).
+    Builds a ChromaDB `where` filter that restricts results to allowed,
+    active files.
+    - allowed_file_ids None → no per-employee restriction (admin sees everything active).
     - [] → empty list means no files are accessible; callers should short-circuit before this.
     - extra → merged with $and when both conditions are needed.
     """
+    active_ids = _active_file_ids()
     if allowed_file_ids is None:
-        return extra  # admin: no restriction
+        effective_ids = active_ids  # admin: restricted only by active status
+    elif active_ids is None:
+        effective_ids = allowed_file_ids
+    else:
+        effective_ids = [fid for fid in allowed_file_ids if fid in active_ids]
 
-    file_clause = {"file_id": {"$in": allowed_file_ids}} if allowed_file_ids else {"file_id": "__no_match__"}
+    if effective_ids is None:
+        return extra
+
+    file_clause = {"file_id": {"$in": effective_ids}} if effective_ids else {"file_id": "__no_match__"}
 
     if extra is None:
         return file_clause
@@ -116,10 +146,19 @@ def _bm25_retrieve(
     if not bm25:
         return []
 
-    # Apply file-level filter on the BM25 corpus
-    if allowed_file_ids is not None:
-        id_set = set(allowed_file_ids)
-        docs_filtered = [d for d in docs if d.metadata.get("file_id") in id_set]
+    active_ids = _active_file_ids()
+    id_set = set(allowed_file_ids) if allowed_file_ids is not None else None
+
+    def _keep(d) -> bool:
+        fid = d.metadata.get("file_id")
+        if active_ids is not None and fid not in active_ids:
+            return False
+        if id_set is not None and fid not in id_set:
+            return False
+        return True
+
+    if active_ids is not None or id_set is not None:
+        docs_filtered = [d for d in docs if _keep(d)]
         if not docs_filtered:
             return []
         tokenized = [d.page_content.lower().split() for d in docs_filtered]

@@ -9,6 +9,7 @@ import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 const STATUS_COLORS: Record<string, string> = {
   open: "bg-amber-100 text-amber-700",
   in_progress: "bg-blue-100 text-blue-700",
+  pending_review: "bg-purple-100 text-purple-700",
   done: "bg-emerald-100 text-emerald-700",
 };
 
@@ -191,7 +192,7 @@ export default function AdminTasksPage() {
                         )}
                       </td>
                       <td className="py-2.5 text-muted-foreground">
-                        {t.assigned_to ?? "Unassigned"}
+                        {t.assigned_to_email ?? "Unassigned"}
                       </td>
                       <td className="py-2.5">
                         <span className={`font-medium capitalize ${PRIORITY_COLORS[t.priority]}`}>
@@ -206,6 +207,7 @@ export default function AdminTasksPage() {
                         >
                           <option value="open">Open</option>
                           <option value="in_progress">In Progress</option>
+                          <option value="pending_review">Pending Review</option>
                           <option value="done">Done</option>
                         </select>
                       </td>

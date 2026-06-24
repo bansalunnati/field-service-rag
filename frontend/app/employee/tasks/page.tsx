@@ -7,12 +7,14 @@ import { getTasks, updateTaskStatus } from "@/services/tasks";
 const STATUS_COLORS: Record<string, string> = {
   open: "bg-amber-100 text-amber-700",
   in_progress: "bg-blue-100 text-blue-700",
+  pending_review: "bg-purple-100 text-purple-700",
   done: "bg-emerald-100 text-emerald-700",
 };
 
 const STATUS_LABELS: Record<string, string> = {
   open: "Open",
   in_progress: "In Progress",
+  pending_review: "Pending Review",
   done: "Done",
 };
 
@@ -26,6 +28,7 @@ const PRIORITY_COLORS: Record<string, string> = {
 const NEXT_STATUS: Record<string, { value: string; label: string } | null> = {
   open: { value: "in_progress", label: "Start" },
   in_progress: { value: "done", label: "Mark Done" },
+  pending_review: null,
   done: null,
 };
 
@@ -85,7 +88,7 @@ export default function EmployeeTasksPage() {
                   <div
                     key={t.id}
                     className={`rounded-lg border px-4 py-3 ${
-                      t.status === "done" ? "opacity-60" : ""
+                      t.status === "done" || t.status === "pending_review" ? "opacity-60" : ""
                     }`}
                   >
                     <div className="flex items-start justify-between gap-3">

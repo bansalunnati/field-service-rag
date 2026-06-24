@@ -20,7 +20,6 @@ from sqlalchemy.orm import Session
 
 from app.chat.database import SessionLocal
 from app.chat.models import FieldReport, GroupFileAccess, HITLReview, Notification, UploadedFile, User, UserGroup, WorkflowTask
-from app.retrieval.retriever import retrieve_with_parent_expansion, retrieve_with_hybrid, get_retriever
 from app.llm.llm_config import llm
 from app.ingestion.text_extraction import extract_text
 from app.storage import file_storage
@@ -67,6 +66,31 @@ def run_agentic_review(report_id: str, file_ref: str, report_type: str) -> None:
         if local_path and os.path.exists(local_path):
             os.unlink(local_path)
         db.close()
+
+
+def _resolve_source_names(db: Session, docs) -> set:
+    """
+    Template chunks carry the on-disk filename (often a generated id) as
+    metadata["source"], plus the originating file's id when known. Resolve
+    back to UploadedFile.original_name so reports show a human-readable
+    document name instead of an internal id/filename.
+    """
+    file_ids = {d.metadata.get("file_id") for d in docs if d.metadata.get("file_id")}
+    names_by_id = {}
+    if file_ids:
+        rows = db.query(UploadedFile.id, UploadedFile.original_name).filter(
+            UploadedFile.id.in_(file_ids)
+        ).all()
+        names_by_id = {row[0]: row[1] for row in rows}
+
+    resolved = set()
+    for d in docs:
+        fid = d.metadata.get("file_id")
+        if fid and fid in names_by_id:
+            resolved.add(names_by_id[fid])
+        else:
+            resolved.add(d.metadata.get("source", "unknown"))
+    return resolved
 
 
 # ── Core review logic ─────────────────────────────────────────────────────────
@@ -126,7 +150,7 @@ def _review(db: Session, report_id: str, file_path: str, report_type: str) -> No
         )
         return
 
-    matched_sources = sorted({d.metadata.get("source", "unknown") for d in template_docs})
+    matched_sources = sorted(_resolve_source_names(db, template_docs))
 
     template_text = "\n\n".join(
         f"[Template Source: {d.metadata.get('source', 'unknown')}]\n{d.page_content}"
@@ -228,7 +252,7 @@ def _fallback_to_hitl(db: Session, report_id: str, reason: str) -> None:
     report.metadata_json = {**(report.metadata_json or {}), "hitl_reason": reason}
     db.commit()
 
-    _notify_employee(db, report, "needs_hitl", "Your report requires manual review by an admin.")
+    _notify_employee(db, report, "needs_hitl", "Your file has been sent for HITL review.")
     _notify_admins(db, report, "needs_hitl", f"Report requires manual review: {reason}")
 
 
@@ -318,26 +342,44 @@ def _grant_template_access(db: Session, report: FieldReport, matched_sources: li
     db.commit()
 
 
-def _retrieve_templates(query: str, per_pipeline_k: int = 3) -> list:
+def _retrieve_templates(query: str, top_n: int = 4, per_pipeline_k: int = 3) -> list:
     """
     Searches every pipeline for the admin-uploaded template/SOP/checklist
-    relevant to this report, instead of only field_reports. Each pipeline
-    uses the same retrieval strategy the chat assistant uses for it, so
-    results are consistent with what a human would find via Policy Chat.
+    relevant to this report, instead of only field_reports.
+
+    Previously this pulled the top `per_pipeline_k` docs from EVERY pipeline
+    unconditionally and fed all of them to the LLM as "the template" — so a
+    report would get compared against an unrelated SOP (e.g. an HVAC
+    equipment doc) just because that pipeline happened to return something,
+    even when the actual matching template lived in a different pipeline.
+    Instead, rank every pipeline's candidates together by similarity score
+    and keep only the overall closest matches, so an irrelevant doc from one
+    pipeline can no longer ride along just because its pipeline was searched.
     """
-    docs = []
+    from app.ingestion.vector_store import get_vector_store
+    from app.retrieval.retriever import _active_file_ids
+
+    active_ids = _active_file_ids()
+    score_filter = {"file_id": {"$in": list(active_ids)}} if active_ids is not None else None
+
+    scored = []
     for pipeline in ALL_PIPELINES:
         try:
-            if pipeline == "equipment":
-                pipeline_docs = retrieve_with_hybrid(query, pipeline=pipeline, top_k=per_pipeline_k)
-            elif pipeline == "field_reports":
-                pipeline_docs = retrieve_with_parent_expansion(query, pipeline=pipeline, top_k=per_pipeline_k)
-            else:
-                pipeline_docs = get_retriever(pipeline=pipeline).invoke(query)[:per_pipeline_k]
+            vector_store = get_vector_store(pipeline)
+            results = vector_store.similarity_search_with_score(
+                query, k=per_pipeline_k, filter=score_filter
+            )
         except Exception:
-            pipeline_docs = []
-        docs.extend(pipeline_docs)
-    return docs
+            results = []
+        scored.extend(results)
+
+    if not scored:
+        return []
+
+    # Lower score = closer match, for both Chroma (cosine distance) and
+    # PGVector's default distance strategy.
+    scored.sort(key=lambda pair: pair[1])
+    return [doc for doc, _ in scored[:top_n]]
 
 
 def _parse_verdict(raw: str) -> tuple:

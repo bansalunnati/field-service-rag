@@ -52,8 +52,8 @@ export default function AssignFilesPage() {
         await api.post(`/api/ingest/files/${selectedFile.id}/access/${groupId}`);
       }
       await loadFileGrants(selectedFile.id);
-    } catch {
-      await notify("Action failed", { destructive: true });
+    } catch (err: any) {
+      await notify(err?.response?.data?.detail ?? "Action failed", { destructive: true });
     } finally {
       setToggling(null);
     }
@@ -147,13 +147,15 @@ export default function AssignFilesPage() {
                         >
                           <div>
                             <p className="text-sm font-medium">{g.name}</p>
-                            <p className="text-xs text-muted-foreground">
-                              {g.member_count ?? 0} members
+                            <p className={`text-xs ${(g.member_count ?? 0) === 0 ? "text-amber-600" : "text-muted-foreground"}`}>
+                              {(g.member_count ?? 0) === 0
+                                ? "No members — add one before granting access"
+                                : `${g.member_count} members`}
                             </p>
                           </div>
                           <button
                             onClick={() => handleToggle(g.id)}
-                            disabled={busy}
+                            disabled={busy || (g.member_count ?? 0) === 0}
                             className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition ${
                               granted
                                 ? "bg-emerald-100 text-emerald-700 hover:bg-red-100 hover:text-red-700"

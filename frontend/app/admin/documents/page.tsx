@@ -275,7 +275,11 @@ export default function DocumentsPage() {
                       <td className="py-2">
                         <button
                           onClick={() => handleToggle(f.id)}
-                          title="Toggle active"
+                          title={
+                            (f.is_active ?? true)
+                              ? "Active — used in chat answers and HITL review. Click to deactivate."
+                              : "Inactive — excluded from chat answers and HITL review. Click to reactivate."
+                          }
                           className="text-muted-foreground hover:text-primary transition"
                         >
                           {(f.is_active ?? true) ? (

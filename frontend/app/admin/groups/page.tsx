@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   getGroups,
@@ -8,24 +8,122 @@ import {
   deleteGroup,
   getGroupDetails,
   removeMember,
-  addMember,
+  addMembersBatch,
+  searchEmployees,
 } from "@/services/groups";
-import api from "@/lib/api";
-import { Loader2, Trash2, Plus, UserMinus, UserPlus } from "lucide-react";
+import { Loader2, Trash2, Plus, UserMinus, X } from "lucide-react";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 
-const PIPELINES = ["equipment", "safety", "field_reports"];
+interface Employee {
+  id: string;
+  email: string;
+}
+
+/** Live-search employee picker with multi-select — type a few characters
+ * of an email to see matches, click to add multiple before submitting. */
+function EmployeePicker({
+  selected,
+  onChange,
+  excludeIds = [],
+}: {
+  selected: Employee[];
+  onChange: (next: Employee[]) => void;
+  excludeIds?: string[];
+}) {
+  const [query, setQuery] = useState("");
+  const [suggestions, setSuggestions] = useState<Employee[]>([]);
+  const [open, setOpen] = useState(false);
+  const boxRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (query.trim().length < 2) {
+      setSuggestions([]);
+      return;
+    }
+    const handle = setTimeout(async () => {
+      try {
+        const results = await searchEmployees(query.trim());
+        const selectedIds = new Set([...selected.map((s) => s.id), ...excludeIds]);
+        setSuggestions(results.filter((r) => !selectedIds.has(r.id)));
+        setOpen(true);
+      } catch {
+        setSuggestions([]);
+      }
+    }, 200);
+    return () => clearTimeout(handle);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query]);
+
+  useEffect(() => {
+    const onClickOutside = (e: MouseEvent) => {
+      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onClickOutside);
+    return () => document.removeEventListener("mousedown", onClickOutside);
+  }, []);
+
+  const addEmployee = (emp: Employee) => {
+    onChange([...selected, emp]);
+    setQuery("");
+    setSuggestions([]);
+    setOpen(false);
+  };
+
+  const removeEmployee = (id: string) => {
+    onChange(selected.filter((s) => s.id !== id));
+  };
+
+  return (
+    <div ref={boxRef} className="relative">
+      {selected.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mb-1.5">
+          {selected.map((emp) => (
+            <span
+              key={emp.id}
+              className="flex items-center gap-1 rounded-full bg-primary/10 text-primary px-2 py-0.5 text-xs"
+            >
+              {emp.email}
+              <button onClick={() => removeEmployee(emp.id)} className="hover:text-destructive">
+                <X size={11} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      <input
+        className="w-full rounded border px-3 py-2 text-sm bg-background"
+        placeholder="Type an email to search employees…"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        onFocus={() => suggestions.length > 0 && setOpen(true)}
+      />
+      {open && suggestions.length > 0 && (
+        <div className="absolute z-10 mt-1 w-full rounded border bg-background shadow-md max-h-48 overflow-y-auto">
+          {suggestions.map((s) => (
+            <button
+              key={s.id}
+              onClick={() => addEmployee(s)}
+              className="block w-full text-left px-3 py-2 text-sm hover:bg-muted"
+            >
+              {s.email}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function GroupsPage() {
   const [groups, setGroups] = useState<any[]>([]);
   const [selectedGroup, setSelectedGroup] = useState<any>(null);
-  const [groupAccess, setGroupAccess] = useState<any[]>([]);
   const [name, setName] = useState("");
   const [desc, setDesc] = useState("");
-  const [initialMember, setInitialMember] = useState("");
-  const [addEmail, setAddEmail] = useState("");
+  const [initialMembers, setInitialMembers] = useState<Employee[]>([]);
+  const [membersToAdd, setMembersToAdd] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [addingMembers, setAddingMembers] = useState(false);
   const { confirm, notify } = useConfirmDialog();
 
   const load = async () => {
@@ -40,12 +138,8 @@ export default function GroupsPage() {
   useEffect(() => { load(); }, []);
 
   const loadGroup = async (id: string) => {
-    const [details, access] = await Promise.all([
-      getGroupDetails(id),
-      api.get(`/api/access/${id}`).then((r) => r.data),
-    ]);
+    const details = await getGroupDetails(id);
     setSelectedGroup(details);
-    setGroupAccess(access.pipelines ?? []);
   };
 
   const handleCreate = async () => {
@@ -53,20 +147,19 @@ export default function GroupsPage() {
     setSaving(true);
     try {
       const group = await createGroup(name, desc);
-      if (initialMember.trim()) {
+      if (initialMembers.length > 0) {
         try {
-          await addMember(group.id, initialMember.trim());
+          await addMembersBatch(group.id, initialMembers.map((m) => m.id));
         } catch {
-          // group created, member add failed — surface below
-          await notify(`Group created but could not add member: user '${initialMember}' not found.`, {
-            title: "Member not added",
+          await notify("Group created but some members could not be added.", {
+            title: "Member add failed",
             destructive: true,
           });
         }
       }
       setName("");
       setDesc("");
-      setInitialMember("");
+      setInitialMembers([]);
       await load();
     } finally {
       setSaving(false);
@@ -84,26 +177,22 @@ export default function GroupsPage() {
   const handleRemoveMember = async (userId: string) => {
     await removeMember(selectedGroup.id, userId);
     await loadGroup(selectedGroup.id);
+    await load();
   };
 
-  const handleAddMember = async () => {
-    if (!addEmail.trim()) return;
+  const handleAddMembers = async () => {
+    if (membersToAdd.length === 0) return;
+    setAddingMembers(true);
     try {
-      await addMember(selectedGroup.id, addEmail.trim());
-      setAddEmail("");
+      await addMembersBatch(selectedGroup.id, membersToAdd.map((m) => m.id));
+      setMembersToAdd([]);
       await loadGroup(selectedGroup.id);
+      await load();
     } catch {
-      await notify("User not found or already a member.", { destructive: true });
+      await notify("Could not add the selected members.", { destructive: true });
+    } finally {
+      setAddingMembers(false);
     }
-  };
-
-  const handleTogglePipeline = async (pipeline: string, currently: boolean) => {
-    if (currently) {
-      await api.delete(`/api/access/${selectedGroup.id}/${pipeline}`);
-    } else {
-      await api.post(`/api/access/${selectedGroup.id}/${pipeline}`);
-    }
-    await loadGroup(selectedGroup.id);
   };
 
   return (
@@ -131,14 +220,9 @@ export default function GroupsPage() {
                 />
                 <div>
                   <label className="text-xs text-muted-foreground block mb-1">
-                    Add initial member (email, optional)
+                    Add members (optional)
                   </label>
-                  <input
-                    className="w-full rounded border px-3 py-2 text-sm bg-background"
-                    placeholder="employee@company.com"
-                    value={initialMember}
-                    onChange={(e) => setInitialMember(e.target.value)}
-                  />
+                  <EmployeePicker selected={initialMembers} onChange={setInitialMembers} />
                 </div>
                 <button
                   onClick={handleCreate}
@@ -193,19 +277,21 @@ export default function GroupsPage() {
             <Card>
               <CardContent className="p-5">
                 <h2 className="font-semibold mb-3">{selectedGroup.name} — Members</h2>
-                <div className="flex gap-2 mb-3">
-                  <input
-                    className="flex-1 rounded border px-3 py-1.5 text-sm bg-background"
-                    placeholder="User email to add"
-                    value={addEmail}
-                    onChange={(e) => setAddEmail(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && handleAddMember()}
-                  />
+                <div className="flex gap-2 mb-3 items-start">
+                  <div className="flex-1">
+                    <EmployeePicker
+                      selected={membersToAdd}
+                      onChange={setMembersToAdd}
+                      excludeIds={(selectedGroup.members ?? []).map((m: any) => m.user_id)}
+                    />
+                  </div>
                   <button
-                    onClick={handleAddMember}
-                    className="flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-xs text-primary-foreground hover:opacity-90"
+                    onClick={handleAddMembers}
+                    disabled={addingMembers || membersToAdd.length === 0}
+                    className="flex items-center gap-1 rounded-lg bg-primary px-3 py-2 text-xs text-primary-foreground hover:opacity-90 disabled:opacity-50 shrink-0"
                   >
-                    <UserPlus size={13} /> Add
+                    {addingMembers ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />}
+                    Add {membersToAdd.length > 0 ? `(${membersToAdd.length})` : ""}
                   </button>
                 </div>
                 {(selectedGroup.members ?? []).length === 0 ? (
@@ -231,31 +317,6 @@ export default function GroupsPage() {
                     ))}
                   </div>
                 )}
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardContent className="p-5">
-                <h2 className="font-semibold mb-3">Pipeline Access</h2>
-                <div className="space-y-2">
-                  {PIPELINES.map((pl) => {
-                    const granted = groupAccess.some((a: any) => a.pipeline === pl && a.granted);
-                    return (
-                      <label
-                        key={pl}
-                        className="flex items-center gap-3 rounded px-2 py-1.5 hover:bg-muted cursor-pointer"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={granted}
-                          onChange={() => handleTogglePipeline(pl, granted)}
-                          className="h-4 w-4 rounded"
-                        />
-                        <span className="text-sm capitalize">{pl.replace(/_/g, " ")}</span>
-                      </label>
-                    );
-                  })}
-                </div>
               </CardContent>
             </Card>
           </div>

@@ -155,41 +155,27 @@ function EmployeeChatPageInner() {
 
   useEffect(() => { loadSessions(); }, []);
 
-  // "Discuss in Policy Chat" from a rejected report deep-links here with
-  // ?reportId=... — auto-create a session, pre-attach the report's own
-  // content + matched templates, and ask the obvious opening question.
+  // "Discuss in Policy Chat" from a report (rejected or under HITL review)
+  // deep-links here with ?reportId=... — auto-create a session and
+  // pre-attach the report's own content + matched templates so the
+  // employee can ask whatever they want about it, with no canned opener.
   useEffect(() => {
     const reportId = searchParams.get("reportId");
     if (!reportId) return;
 
     (async () => {
       setAttaching(true);
-      setLoading(true);
       try {
-        const session = await createSession("safety", "Why was my report rejected?");
+        const session = await createSession("safety", "Report discussion");
         setSessionId(session.id);
         await loadSessions();
-
         const attachment = await attachReportToChat(session.id, reportId);
-        const question = "Why was this report rejected and what does the template require?";
-        setMessages((prev) => [...prev, { role: "user", content: question }]);
-
-        const result = await sendMessage(
-          session.id,
-          question,
-          attachment.extracted_text,
-          attachment.filename
-        );
-        setMessages((prev) => [
-          ...prev,
-          { role: "assistant", content: result.answer, citations: result.citations },
-        ]);
+        setAttachedFile(attachment);
       } catch (err) {
         const msg = extractErrorMessage(err);
         setMessages((prev) => [...prev, { role: "assistant", content: msg, citations: [] }]);
       } finally {
         setAttaching(false);
-        setLoading(false);
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps

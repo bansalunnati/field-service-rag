@@ -29,3 +29,15 @@ export const addMember = async (groupId: string, userEmail: string) => {
 export const removeMember = async (groupId: string, userId: string) => {
   await api.delete(`/api/groups/${groupId}/members/${userId}`);
 };
+
+export const searchEmployees = async (q: string) => {
+  const res = await api.get("/api/groups/employees/search", { params: { q } });
+  return res.data as { id: string; email: string }[];
+};
+
+export const addMembersBatch = async (groupId: string, userIds: string[]) => {
+  const res = await api.post(`/api/groups/${groupId}/members/batch`, {
+    user_ids: userIds,
+  });
+  return res.data;
+};

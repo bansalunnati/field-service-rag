@@ -21,6 +21,7 @@ Access Rules:
 import os
 import time
 import uuid
+from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
@@ -42,6 +43,18 @@ from app.chat.models import FieldReport, FileAccess, GroupFileAccess, QueryLog, 
 from app.ingestion.text_extraction import extract_text
 from app.retrieval.rag_pipeline import ask_question_across_pipelines
 from app.storage import file_storage
+
+
+def _iso(dt: Optional[datetime]) -> Optional[str]:
+    """
+    Datetimes are stored naive-UTC (datetime.utcnow()). str(dt) drops the
+    timezone, so the frontend's `new Date(...)` either fails to parse
+    ("Invalid Date") or silently reinterprets the value as local time.
+    Tag it explicitly as UTC so the browser converts it correctly.
+    """
+    if dt is None:
+        return None
+    return dt.isoformat() + "Z"
 
 
 router = APIRouter(
@@ -135,7 +148,7 @@ async def new_session(
         "id": session.id,
         "title": session.title,
         "pipeline": session.pipeline,
-        "updated_at": str(session.updated_at),
+        "updated_at": _iso(session.updated_at),
     }
 
 
@@ -151,7 +164,7 @@ async def list_sessions(
             "id": session.id,
             "title": session.title,
             "pipeline": session.pipeline,
-            "updated_at": str(session.updated_at),
+            "updated_at": _iso(session.updated_at),
         }
         for session in sessions
     ]
@@ -202,7 +215,7 @@ async def session_messages(
             "role": message.role,
             "content": message.content,
             "citations": message.citations,
-            "created_at": str(message.created_at),
+            "created_at": _iso(message.created_at),
         }
         for message in messages
     ]

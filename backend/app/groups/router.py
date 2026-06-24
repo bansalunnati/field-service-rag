@@ -46,6 +46,10 @@ class AddMemberRequest(BaseModel):
     user_id: str
 
 
+class AddMembersRequest(BaseModel):
+    user_ids: list[str]
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @router.post("", status_code=201)
@@ -110,6 +114,71 @@ async def my_groups(
                 "members": members,
             })
     return result
+
+
+@router.get("/employees/search")
+async def search_employees(
+    q: str = "",
+    db: Session = Depends(get_db),
+    user: TokenData = Depends(require_admin),
+):
+    """
+    Live-search employees by email, for the group member picker — returns
+    matches as soon as a few characters are typed instead of requiring the
+    admin to type a full email address.
+    """
+    query = db.query(User).filter(User.role != "admin")
+    q = q.strip()
+    if q:
+        query = query.filter(User.email.ilike(f"%{q}%"))
+    users = query.order_by(User.email).limit(20).all()
+    return [{"id": u.id, "email": u.email} for u in users]
+
+
+@router.post("/{group_id}/members/batch", status_code=201)
+async def add_members_batch(
+    group_id: str,
+    body: AddMembersRequest,
+    db: Session = Depends(get_db),
+    user: TokenData = Depends(require_admin),
+):
+    """Add multiple employees to a group in one call."""
+    group = db.query(Group).filter(Group.id == group_id).first()
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+
+    existing_ids = {
+        m.user_id
+        for m in db.query(UserGroup).filter(UserGroup.group_id == group_id).all()
+    }
+
+    added = []
+    skipped = []
+    for raw_id in body.user_ids:
+        target_user = (
+            db.query(User).filter(User.id == raw_id).first()
+            or db.query(User).filter(User.email == raw_id).first()
+        )
+        if not target_user:
+            skipped.append(raw_id)
+            continue
+        if target_user.id in existing_ids:
+            skipped.append(target_user.email)
+            continue
+
+        db.add(UserGroup(user_id=target_user.id, group_id=group_id))
+        db.add(Notification(
+            user_id=target_user.id,
+            notification_type="group_added",
+            message=f"You have been added to the group '{group.name}'.",
+            ref_type="group",
+            ref_id=group_id,
+        ))
+        existing_ids.add(target_user.id)
+        added.append(target_user.email)
+
+    db.commit()
+    return {"added": added, "skipped": skipped}
 
 
 @router.get("/{group_id}")

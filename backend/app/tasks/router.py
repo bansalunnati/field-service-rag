@@ -28,7 +28,7 @@ from app.chat.models import WorkflowTask, FieldReport, User, Notification
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
-VALID_STATUSES = {"open", "in_progress", "done"}
+VALID_STATUSES = {"open", "in_progress", "pending_review", "done"}
 VALID_PRIORITIES = {"low", "medium", "high"}
 
 
@@ -177,6 +177,11 @@ async def update_task_status(
     """
     The assignee (or an admin) updates task status.
     Notifies all admins so they know whether the task was completed or not.
+
+    An employee marking "done" only moves the task to "pending_review" —
+    self-reported completion isn't reflected as done on the admin side
+    until an admin confirms it. Only an admin can set status to "done"
+    directly.
     """
     if body.status not in VALID_STATUSES:
         raise HTTPException(status_code=400, detail=f"status must be one of {sorted(VALID_STATUSES)}")
@@ -187,19 +192,25 @@ async def update_task_status(
     if user.role != "admin" and task.assigned_to != user.user_id:
         raise HTTPException(status_code=403, detail="Access denied")
 
+    new_status = body.status
+    if user.role != "admin" and new_status == "done":
+        new_status = "pending_review"
+
     previous_status = task.status
-    task.status = body.status
+    task.status = new_status
     task.updated_at = datetime.utcnow()
     db.commit()
 
     # Notify admins of the status change, calling out completion explicitly.
-    if previous_status != body.status:
+    if previous_status != new_status:
         assignee = db.query(User).filter(User.id == task.assigned_to).first()
         assignee_label = assignee.email if assignee else "An employee"
-        if body.status == "done":
-            message = f"{assignee_label} marked task '{task.title}' as completed."
+        if new_status == "pending_review":
+            message = f"{assignee_label} marked task '{task.title}' done — awaiting your confirmation."
+        elif new_status == "done":
+            message = f"Task '{task.title}' confirmed complete."
         else:
-            message = f"{assignee_label} updated task '{task.title}' to '{body.status}'."
+            message = f"{assignee_label} updated task '{task.title}' to '{new_status}'."
         for admin_id in _get_admin_ids(db):
             db.add(Notification(
                 user_id=admin_id,

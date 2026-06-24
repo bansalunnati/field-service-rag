@@ -471,7 +471,14 @@ async def grant_file_access(
     group = db.query(Group).filter(Group.id == group_id).first()
     if not group:
         raise HTTPException(status_code=404, detail="Group not found")
- 
+
+    member_count = db.query(UserGroup).filter(UserGroup.group_id == group_id).count()
+    if member_count == 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"This group has no members. Please add at least one member before granting access.",
+        )
+
     existing = (
         db.query(GroupFileAccess)
         .filter(GroupFileAccess.file_id == file_id, GroupFileAccess.group_id == group_id)
