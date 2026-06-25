@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Card, CardContent } from "@/components/ui/card";
 import { submitReport, getMyReports, previewReport } from "@/services/reports";
@@ -43,6 +43,24 @@ export default function EmployeeReportsPage() {
   // to, and the AI reviewer needs to know exactly which task a report is
   // for rather than guessing from file content alone.
   const activeTasks = tasks.filter((t) => t.status !== "done");
+
+  // Group submissions by the task they were submitted for, so it's clear
+  // at a glance which reports belong to which task instead of one flat list.
+  const groupedByTask = useMemo(() => {
+    const map = new Map<string, { taskId: string | null; taskTitle: string; reports: any[] }>();
+    for (const r of reports) {
+      const key = r.task_id ?? "__unlinked__";
+      if (!map.has(key)) {
+        map.set(key, {
+          taskId: r.task_id ?? null,
+          taskTitle: r.task_title ?? "No task linked",
+          reports: [],
+        });
+      }
+      map.get(key)!.reports.push(r);
+    }
+    return Array.from(map.values()).sort((a, b) => b.reports.length - a.reports.length);
+  }, [reports]);
 
   const loadTasks = async () => {
     try {
@@ -225,70 +243,86 @@ export default function EmployeeReportsPage() {
           ) : reports.length === 0 ? (
             <p className="text-sm text-muted-foreground">No reports submitted yet.</p>
           ) : (
-            <div className="space-y-2">
-              {reports.map((r: any) => (
-                <div
-                  key={r.id}
-                  className="flex items-center justify-between rounded-lg border px-4 py-3"
-                >
-                  <div>
-                    <p className="text-sm font-medium flex items-center gap-2">
-                      {r.title}
-                      {r.ocr_used && (
-                        <span className="rounded-full bg-amber-100 text-amber-700 px-2 py-0.5 text-[10px] font-medium">
-                          OCR
-                        </span>
-                      )}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      {r.report_type} ·{" "}
-                      {r.submitted_at
-                        ? new Date(r.submitted_at).toLocaleDateString()
-                        : ""}
-                      {r.task_title && <> · Task: {r.task_title}</>}
-                    </p>
-                    {r.ai_summary && (
-                      <p className="text-xs text-muted-foreground mt-1 italic">
-                        &ldquo;{r.ai_summary}&rdquo;
-                      </p>
+            <div className="space-y-5">
+              {groupedByTask.map((group) => (
+                <div key={group.taskId ?? "__unlinked__"}>
+                  <div className="flex items-center gap-2 mb-2">
+                    <h3 className="text-sm font-semibold">{group.taskTitle}</h3>
+                    {group.taskId && (
+                      <span className="font-mono text-[10px] text-muted-foreground">
+                        #{group.taskId.slice(0, 8)}
+                      </span>
                     )}
-                    {r.matched_sources?.length > 0 && (
-                      <p className="text-[11px] text-muted-foreground mt-0.5">
-                        Checked against: {r.matched_sources.join(", ")}
-                      </p>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <span
-                      className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                        STATUS_STYLES[r.status] ?? "bg-muted"
-                      }`}
-                    >
-                      {r.status.replace("_", " ")}
+                    <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+                      {group.reports.length} submission{group.reports.length === 1 ? "" : "s"}
                     </span>
-                    <button
-                      onClick={() => handlePreview(r.id)}
-                      disabled={previewingId === r.id}
-                      title="Preview submitted file"
-                      className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition disabled:opacity-50"
-                    >
-                      {previewingId === r.id ? (
-                        <Loader2 size={14} className="animate-spin" />
-                      ) : (
-                        <Eye size={14} />
-                      )}
-                      Preview
-                    </button>
-                    {(r.status === "rejected" || r.status === "needs_hitl") && (
-                      <button
-                        onClick={() => router.push(`/employee/chat?reportId=${r.id}`)}
-                        title="Discuss this report's rejection in Policy Chat"
-                        className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition"
+                  </div>
+                  <div className="space-y-2">
+                    {group.reports.map((r: any) => (
+                      <div
+                        key={r.id}
+                        className="flex items-center justify-between rounded-lg border px-4 py-3"
                       >
-                        <MessageCircle size={14} />
-                        Discuss in Policy Chat
-                      </button>
-                    )}
+                        <div>
+                          <p className="text-sm font-medium flex items-center gap-2">
+                            {r.title}
+                            {r.ocr_used && (
+                              <span className="rounded-full bg-amber-100 text-amber-700 px-2 py-0.5 text-[10px] font-medium">
+                                OCR
+                              </span>
+                            )}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {r.report_type} ·{" "}
+                            {r.submitted_at
+                              ? new Date(r.submitted_at).toLocaleDateString()
+                              : ""}
+                          </p>
+                          {r.ai_summary && (
+                            <p className="text-xs text-muted-foreground mt-1 italic">
+                              &ldquo;{r.ai_summary}&rdquo;
+                            </p>
+                          )}
+                          {r.matched_sources?.length > 0 && (
+                            <p className="text-[11px] text-muted-foreground mt-0.5">
+                              Checked against: {r.matched_sources.join(", ")}
+                            </p>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <span
+                            className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                              STATUS_STYLES[r.status] ?? "bg-muted"
+                            }`}
+                          >
+                            {r.status.replace("_", " ")}
+                          </span>
+                          <button
+                            onClick={() => handlePreview(r.id)}
+                            disabled={previewingId === r.id}
+                            title="Preview submitted file"
+                            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition disabled:opacity-50"
+                          >
+                            {previewingId === r.id ? (
+                              <Loader2 size={14} className="animate-spin" />
+                            ) : (
+                              <Eye size={14} />
+                            )}
+                            Preview
+                          </button>
+                          {(r.status === "rejected" || r.status === "needs_hitl") && (
+                            <button
+                              onClick={() => router.push(`/employee/chat?reportId=${r.id}`)}
+                              title="Discuss this report's rejection in Policy Chat"
+                              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition"
+                            >
+                              <MessageCircle size={14} />
+                              Discuss in Policy Chat
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
               ))}
