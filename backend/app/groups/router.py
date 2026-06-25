@@ -123,16 +123,16 @@ async def search_employees(
     user: TokenData = Depends(require_admin),
 ):
     """
-    Live-search employees by email, for the group member picker — returns
-    matches as soon as a few characters are typed instead of requiring the
-    admin to type a full email address.
+    Live-search all users (any role) by email, for the group member picker —
+    returns matches as soon as a few characters are typed instead of
+    requiring the admin to type a full email address.
     """
-    query = db.query(User).filter(User.role != "admin")
+    query = db.query(User)
     q = q.strip()
     if q:
         query = query.filter(User.email.ilike(f"%{q}%"))
     users = query.order_by(User.email).limit(20).all()
-    return [{"id": u.id, "email": u.email} for u in users]
+    return [{"id": u.id, "email": u.email, "role": u.role} for u in users]
 
 
 @router.post("/{group_id}/members/batch", status_code=201)

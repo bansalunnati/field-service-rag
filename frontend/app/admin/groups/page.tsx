@@ -17,6 +17,7 @@ import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 interface Employee {
   id: string;
   email: string;
+  role?: string;
 }
 
 /** Live-search employee picker with multi-select — type a few characters
@@ -83,6 +84,7 @@ function EmployeePicker({
               className="flex items-center gap-1 rounded-full bg-primary/10 text-primary px-2 py-0.5 text-xs"
             >
               {emp.email}
+              {emp.role && <span className="capitalize opacity-70">({emp.role})</span>}
               <button onClick={() => removeEmployee(emp.id)} className="hover:text-destructive">
                 <X size={11} />
               </button>
@@ -103,9 +105,12 @@ function EmployeePicker({
             <button
               key={s.id}
               onClick={() => addEmployee(s)}
-              className="block w-full text-left px-3 py-2 text-sm hover:bg-muted"
+              className="flex w-full items-center justify-between text-left px-3 py-2 text-sm hover:bg-muted"
             >
-              {s.email}
+              <span>{s.email}</span>
+              {s.role && (
+                <span className="ml-2 text-xs text-muted-foreground capitalize">{s.role}</span>
+              )}
             </button>
           ))}
         </div>
