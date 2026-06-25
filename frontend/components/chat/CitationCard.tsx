@@ -24,13 +24,13 @@ export default function CitationCard({ citations }: CitationCardProps) {
           key={i}
           className="rounded border bg-muted/40 px-3 py-2 text-xs"
         >
-          <div className="flex items-center gap-2 font-medium">
-            <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-primary/10 text-[10px] text-primary font-bold">
+          <div className="flex items-center gap-2 font-medium flex-wrap">
+            <span className="inline-flex h-4 shrink-0 items-center justify-center rounded-full bg-primary/10 px-1.5 text-[10px] text-primary font-bold whitespace-nowrap">
               {c.ref ?? i + 1}
             </span>
-            <span className="truncate">{c.source ?? "Unknown source"}</span>
+            <span className="truncate min-w-0">{c.source ?? "Unknown source"}</span>
             {c.page && (
-              <span className="ml-auto shrink-0 text-muted-foreground">
+              <span className="ml-auto shrink-0 text-muted-foreground whitespace-nowrap">
                 p.{c.page}
               </span>
             )}

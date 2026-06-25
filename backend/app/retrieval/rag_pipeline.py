@@ -173,10 +173,15 @@ def ask_question_across_pipelines(
 
     ref_block   = _build_ref_block(docs)
     if attached_text:
+        # Give the attachment its own [REF-N] like every other source, numbered
+        # after the retrieved docs — otherwise the model has nothing but a raw
+        # "[UPLOADED FILE: ...]" label to cite it with, and that whole string
+        # ends up jammed into the citation's short numeric "ref" badge in the UI.
+        attached_ref = f"REF-{len(docs) + 1}"
         attached_block = (
-            f"[UPLOADED FILE: {attached_filename or 'attachment'}]\n{attached_text}\n"
+            f"[{attached_ref}] Source: {attached_filename or 'attachment'}, Page —\n{attached_text}\n"
         )
-        ref_block = f"{attached_block}\n{ref_block}" if ref_block else attached_block
+        ref_block = f"{ref_block}\n{attached_block}" if ref_block else attached_block
     history_str = _build_history_str(history)
 
     prompt = f"""You are an AI assistant for a Utilities and Facility Management team.
