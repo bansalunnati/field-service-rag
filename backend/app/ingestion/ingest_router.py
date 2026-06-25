@@ -81,6 +81,7 @@ def _process_ocr_upload(
     local_path: str,
     suffix: str,
     pipeline: Optional[str],
+    original_filename: Optional[str] = None,
 ):
     """
     Runs OCR + ingestion for an image/scanned-PDF upload OUTSIDE the HTTP
@@ -119,7 +120,9 @@ def _process_ocr_upload(
             txt_tmp.write(ocr_text)
             txt_path = txt_tmp.name
 
-        result = ingest_single_file(txt_path, pipeline=pipeline, file_id=file_id)
+        result = ingest_single_file(
+            txt_path, pipeline=pipeline, file_id=file_id, original_filename=original_filename,
+        )
         invalidate_bm25_cache(result["pipeline"])
 
         record = db.query(UploadedFile).filter(UploadedFile.id == file_id).first()
@@ -224,6 +227,7 @@ async def upload_document(
             local_path=tmp_path,
             suffix=suffix,
             pipeline=pipeline,
+            original_filename=file.filename,
         )
 
         return IngestResponse(
@@ -240,7 +244,9 @@ async def upload_document(
 
     # ── No OCR needed — ingest synchronously, same as before ────────────────
     try:
-        result = ingest_single_file(tmp_path, pipeline=pipeline, file_id=new_file_id)
+        result = ingest_single_file(
+            tmp_path, pipeline=pipeline, file_id=new_file_id, original_filename=file.filename,
+        )
     except Exception as exc:
         file_storage.delete(permanent_ref)
         raise HTTPException(status_code=422, detail=f"Ingestion failed: {exc}")
@@ -403,6 +409,7 @@ async def retry_failed_upload(
         local_path=local_path,
         suffix=suffix,
         pipeline=file.pipeline,
+        original_filename=file.original_name,
     )
     return {"id": file_id, "status": "processing"}
 

@@ -60,7 +60,12 @@ def ingest_documents(
     return len(all_docs), total_chunks
 
 
-def ingest_single_file(file_path: str, pipeline: Optional[str] = None, file_id: Optional[str] = None) -> dict:
+def ingest_single_file(
+    file_path: str,
+    pipeline: Optional[str] = None,
+    file_id: Optional[str] = None,
+    original_filename: Optional[str] = None,
+) -> dict:
     """
     Ingests a single uploaded file into the correct ChromaDB collection.
 
@@ -71,8 +76,18 @@ def ingest_single_file(file_path: str, pipeline: Optional[str] = None, file_id: 
     will not change, only the internal loading logic will be extended.
 
     Args:
-        file_path : Absolute path to the uploaded file (temp file).
-        pipeline  : Override auto-detection with an explicit pipeline key.
+        file_path         : Absolute path to the uploaded file (often a temp
+                             file — its basename is NOT the name the user
+                             uploaded, see original_filename).
+        pipeline           : Override auto-detection with an explicit pipeline key.
+        original_filename : The name the user actually uploaded (e.g.
+                             "Safety_Inspection_Q3.pdf"). Stamped onto chunk
+                             metadata as "source" so citations in chat show
+                             the real filename instead of a generated temp
+                             name like "tmp9ktamn29.pdf". Falls back to
+                             file_path's basename when not provided (batch
+                             ingestion from a real directory, where the path
+                             basename already is the real filename).
 
     Returns:
         {
@@ -90,7 +105,7 @@ def ingest_single_file(file_path: str, pipeline: Optional[str] = None, file_id: 
     )
 
     ext      = os.path.splitext(file_path)[1].lower()
-    filename = os.path.basename(file_path)
+    filename = original_filename or os.path.basename(file_path)
     detected_pipeline = pipeline or _detect_pipeline(filename)
 
     loader_map = {
