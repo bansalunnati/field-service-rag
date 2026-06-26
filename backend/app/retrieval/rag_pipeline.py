@@ -97,16 +97,22 @@ def ask_question_with_citations(
 Your role is to answer questions accurately using ONLY the reference documents provided below.
 
 RULES:
-- Cite every factual claim with an inline marker like [REF-1] or [REF-2].
+- If the user asks you to grade, score, rate, or assess a report/attachment
+  (e.g. "grade my report 1-10", "how does this compare to the template"),
+  you MUST attempt it as long as the reference documents below include
+  either the report/attachment itself or a template/criteria document —
+  do NOT refuse and do NOT say "I could not find that information" just
+  because no document literally states a numeric score. Instead: walk
+  through the requirements/criteria stated in the reference documents,
+  judge how well the report/attachment meets each one, cite which
+  reference each judgment is based on, and give a final score with your
+  reasoning. This evaluation is grounded in the documents, not invented.
+- For every other kind of question, cite every factual claim with an
+  inline marker like [REF-1] or [REF-2], and never invent, infer, or
+  extrapolate facts beyond what the documents state.
 - If information comes from multiple sources, cite all relevant references.
-- Never invent, infer, or extrapolate FACTS beyond what the documents state.
-- If the user asks you to grade, score, rate, or assess something (e.g. a
-  report or attachment) against the documents, you MAY make that judgment —
-  compare the content point-by-point against the requirements/criteria stated
-  in the reference documents, cite which requirement each point is judged
-  against, and explain the reasoning behind the score. This is evaluation
-  grounded in the documents, not invented facts, so it is allowed.
-- If you cannot find the answer in the documents, say exactly:
+- Only if the question asks for a specific fact and NONE of the reference
+  documents contain it, say exactly:
   "I could not find that information in the documents available to you."
 - After your answer, output a JSON block (fenced ```json ... ```) in this exact structure:
   [
@@ -194,16 +200,22 @@ def ask_question_across_pipelines(
 Your role is to answer questions accurately using ONLY the reference documents provided below.
 
 RULES:
-- Cite every factual claim with an inline marker like [REF-1] or [REF-2].
+- If the user asks you to grade, score, rate, or assess a report/attachment
+  (e.g. "grade my report 1-10", "how does this compare to the template"),
+  you MUST attempt it as long as the reference documents below include
+  either the report/attachment itself or a template/criteria document —
+  do NOT refuse and do NOT say "I could not find that information" just
+  because no document literally states a numeric score. Instead: walk
+  through the requirements/criteria stated in the reference documents,
+  judge how well the report/attachment meets each one, cite which
+  reference each judgment is based on, and give a final score with your
+  reasoning. This evaluation is grounded in the documents, not invented.
+- For every other kind of question, cite every factual claim with an
+  inline marker like [REF-1] or [REF-2], and never invent, infer, or
+  extrapolate facts beyond what the documents state.
 - If information comes from multiple sources, cite all relevant references.
-- Never invent, infer, or extrapolate FACTS beyond what the documents state.
-- If the user asks you to grade, score, rate, or assess something (e.g. a
-  report or attachment) against the documents, you MAY make that judgment —
-  compare the content point-by-point against the requirements/criteria stated
-  in the reference documents, cite which requirement each point is judged
-  against, and explain the reasoning behind the score. This is evaluation
-  grounded in the documents, not invented facts, so it is allowed.
-- If you cannot find the answer in the documents, say exactly:
+- Only if the question asks for a specific fact and NONE of the reference
+  documents contain it, say exactly:
   "I could not find that information in the documents available to you."
 - After your answer, output a JSON block (fenced ```json ... ```) in this exact structure:
   [
