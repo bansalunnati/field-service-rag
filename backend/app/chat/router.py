@@ -356,6 +356,15 @@ async def query(
 
     # Resolve which file IDs the employee may retrieve from, per pipeline.
     # Admins map every pipeline to None → no filter (see all chunks).
+    #
+    # A group can reach a pipeline two ways: a blanket FileAccess grant (every
+    # file in the pipeline) or specific per-file GroupFileAccess grants (only
+    # those files — originally meant just for Documents-page visibility, but
+    # an admin picking specific files clearly intends chat to be scoped the
+    # same way, not to silently widen back out to the whole pipeline).
+    # If the group has explicit per-file grants for this pipeline, those are
+    # the restriction; only fall back to unrestricted (None) when there are
+    # no per-file grants at all, so a pure blanket grant still works.
     allowed_file_ids_by_pipeline: dict = {}
     if user.role == "admin":
         allowed_file_ids_by_pipeline = {p: None for p in pipelines}
@@ -374,7 +383,7 @@ async def query(
                 )
                 .all()
             )
-            allowed_file_ids_by_pipeline[p] = [g.file_id for g in grants]
+            allowed_file_ids_by_pipeline[p] = [g.file_id for g in grants] if grants else None
 
     # Run RAG pipeline with latency tracking
     t0 = time.monotonic()

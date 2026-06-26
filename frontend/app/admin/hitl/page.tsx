@@ -93,7 +93,7 @@ export default function HitlPage() {
                     <p className="text-xs text-muted-foreground mt-0.5">
                       Status: {item.status ?? ""} ·{" "}
                       {item.submitted_at
-                        ? new Date(item.submitted_at).toLocaleDateString()
+                        ? new Date(item.submitted_at).toLocaleString()
                         : ""}
                     </p>
                     {item.hitl_reason && (

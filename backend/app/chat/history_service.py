@@ -7,6 +7,7 @@ Builds the conversation window that is passed to the LLM for multi-turn memory.
 Default pipeline changed from 'policy' → 'safety' in Phase 1.
 """
 
+from datetime import datetime
 from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
 from app.chat.models import ChatSession, ChatMessage
@@ -109,17 +110,24 @@ def append_message(
     Returns:
         The newly created ChatMessage ORM object.
     """
+    # created_at's column default only applies once SQLAlchemy flushes/inserts
+    # this row — reading msg.created_at right after construction would still
+    # be None, which used to get written straight into the session's
+    # updated_at below (NULL in the DB -> "Jan 1 1970" once the frontend did
+    # new Date(null)). Compute the timestamp explicitly so both rows agree.
+    now = datetime.utcnow()
     msg = ChatMessage(
         session_id=session_id,
         role=role,
         content=content,
         citations=citations or [],
+        created_at=now,
     )
     db.add(msg)
 
     # Bump session so it appears at top of the history sidebar.
     db.query(ChatSession).filter(ChatSession.id == session_id).update(
-        {"updated_at": msg.created_at}
+        {"updated_at": now}
     )
 
     db.commit()
