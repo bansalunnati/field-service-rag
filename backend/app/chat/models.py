@@ -12,7 +12,7 @@ NEW (Phase 2):
   Group         — teams / departments (e.g. Electrical, Safety)
   UserGroup     — which users belong to which group
   FileAccess    — which groups can access which pipeline
-  UploadedFile  — registry of every file ingested into ChromaDB
+  UploadedFile  — registry of every file ingested into pgvector
   FieldReport   — submitted field investigation reports
   HITLReview    — human-in-the-loop review queue for reports
   WorkflowTask  — task assignments generated from approved reports
@@ -130,7 +130,7 @@ class UserGroup(Base):
 
 class FileAccess(Base):
     """
-    Controls which pipelines (ChromaDB collections) a group can query.
+    Controls which pipelines (pgvector collections) a group can query.
 
     pipeline values: "equipment" | "safety" | "field_reports"
 

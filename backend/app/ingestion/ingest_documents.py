@@ -5,9 +5,9 @@ Batch ingestion (entire directory) and single-file ingestion.
 Auto-routes each file to the correct pipeline collection.
 
 Pipeline keys (updated in Phase 1):
-  equipment    → equipment_assets   ChromaDB collection
-  safety       → safety_compliance  ChromaDB collection
-  field_reports → field_reports_docs ChromaDB collection
+  equipment    → equipment_assets   pgvector collection
+  safety       → safety_compliance  pgvector collection
+  field_reports → field_reports_docs pgvector collection
 """
 
 import os
@@ -25,7 +25,7 @@ def ingest_documents(
     pipeline: Optional[str] = None,
 ) -> tuple:
     """
-    Ingests all supported files from a directory into ChromaDB.
+    Ingests all supported files from a directory into pgvector.
 
     Groups files by detected pipeline and sends each group to the correct
     collection. Returns (total_pages, total_chunks) for the /process endpoint.
@@ -67,7 +67,7 @@ def ingest_single_file(
     original_filename: Optional[str] = None,
 ) -> dict:
     """
-    Ingests a single uploaded file into the correct ChromaDB collection.
+    Ingests a single uploaded file into the correct pgvector collection.
 
     Called by the FastAPI /api/ingest/upload endpoint after the file
     has been saved to a temp path.
@@ -94,7 +94,7 @@ def ingest_single_file(
             "filename":  str,   # Original filename (no temp path).
             "pipeline":  str,   # Pipeline the file was ingested into.
             "pages":     int,   # Number of pages/sections loaded.
-            "chunks":    int,   # Number of chunks stored in ChromaDB.
+            "chunks":    int,   # Number of chunks stored in pgvector.
         }
 
     Raises:

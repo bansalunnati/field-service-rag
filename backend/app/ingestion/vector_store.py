@@ -1,16 +1,9 @@
 """
 ingestion/vector_store.py
 
-Creates and loads named vector collections, one per pipeline.
-
-Backend selection:
-  - If DATABASE_URL is PostgreSQL (Render production), vectors are stored in
-    that same Postgres database via pgvector. Metadata (UploadedFile rows)
-    and embeddings then live in one transactional store, so they can never
-    drift apart the way they did with disk-backed Chroma on an ephemeral
-    container filesystem.
-  - Otherwise (local dev on SQLite), falls back to a local Chroma directory
-    for convenience — no Postgres/pgvector setup needed to develop locally.
+Creates and loads named vector collections, one per pipeline, backed by
+pgvector in the same Postgres database used for app metadata (UploadedFile
+rows, etc.) — so embeddings and metadata always stay consistent.
 
 Pipeline → Collection mapping (updated in Phase 1):
   equipment    → "equipment_assets"
@@ -18,23 +11,11 @@ Pipeline → Collection mapping (updated in Phase 1):
   field_reports → "field_reports_docs"
 """
 
-import os
-from langchain_community.vectorstores import Chroma
 from langchain_community.vectorstores.pgvector import PGVector
 from langchain_core.documents import Document
 from app.llm.embedding_config import get_embedding_model
 from app.chat.database import DATABASE_URL
 from typing import List
-
-CHROMA_BASE_DIR = os.getenv("CHROMA_BASE_DIR", "chroma_db")
-
-# Explicit override available via VECTOR_STORE=chroma|pgvector; defaults to
-# pgvector whenever a real Postgres DATABASE_URL is configured.
-_VECTOR_STORE_OVERRIDE = os.getenv("VECTOR_STORE", "").strip().lower()
-if _VECTOR_STORE_OVERRIDE in ("chroma", "pgvector"):
-    USE_PGVECTOR = _VECTOR_STORE_OVERRIDE == "pgvector"
-else:
-    USE_PGVECTOR = DATABASE_URL.startswith("postgresql")
 
 # One named collection per pipeline.
 # Add new pipelines here — nowhere else needs to change.
@@ -65,28 +46,19 @@ def create_vector_store(chunks: List[Document], pipeline: str = "field_reports")
         pipeline : One of 'equipment', 'safety', 'field_reports'.
 
     Returns:
-        The vector store instance (PGVector or Chroma).
+        The PGVector store instance.
     """
     collection_name = get_collection_name(pipeline)
 
-    if USE_PGVECTOR:
-        vector_store = PGVector.from_documents(
-            documents=chunks,
-            embedding=get_embedding_model(),
-            collection_name=collection_name,
-            connection_string=DATABASE_URL,
-            use_jsonb=True,
-        )
-    else:
-        vector_store = Chroma.from_documents(
-            documents=chunks,
-            embedding=get_embedding_model(),
-            persist_directory=CHROMA_BASE_DIR,
-            collection_name=collection_name,
-            collection_metadata={"hnsw:space": "cosine"},
-        )
+    vector_store = PGVector.from_documents(
+        documents=chunks,
+        embedding=get_embedding_model(),
+        collection_name=collection_name,
+        connection_string=DATABASE_URL,
+        use_jsonb=True,
+    )
 
-    print(f"  Stored {len(chunks)} chunks → collection: '{collection_name}' ({'pgvector' if USE_PGVECTOR else 'chroma'})")
+    print(f"  Stored {len(chunks)} chunks → collection: '{collection_name}' (pgvector)")
     return vector_store
 
 
@@ -98,23 +70,15 @@ def get_vector_store(pipeline: str = "field_reports"):
         pipeline : One of 'equipment', 'safety', 'field_reports'.
 
     Returns:
-        Vector store ready for similarity search (PGVector or Chroma).
+        PGVector store ready for similarity search.
     """
     collection_name = get_collection_name(pipeline)
 
-    if USE_PGVECTOR:
-        return PGVector(
-            embedding_function=get_embedding_model(),
-            collection_name=collection_name,
-            connection_string=DATABASE_URL,
-            use_jsonb=True,
-        )
-
-    return Chroma(
-        persist_directory=CHROMA_BASE_DIR,
+    return PGVector(
         embedding_function=get_embedding_model(),
         collection_name=collection_name,
-        collection_metadata={"hnsw:space": "cosine"},
+        connection_string=DATABASE_URL,
+        use_jsonb=True,
     )
 
 
@@ -122,27 +86,21 @@ def get_all_documents(pipeline: str = "field_reports") -> List[Document]:
     """
     Returns every document currently stored in a pipeline's collection.
 
-    Backend-agnostic helper used by the BM25 index builder, which otherwise
-    has no portable way to dump an entire collection.
+    Used by the BM25 index builder, which otherwise has no portable way to
+    dump an entire collection.
     """
     vector_store = get_vector_store(pipeline)
 
-    if USE_PGVECTOR:
-        with vector_store._make_session() as session:
-            collection = vector_store.get_collection(session)
-            if not collection:
-                return []
-            rows = (
-                session.query(vector_store.EmbeddingStore)
-                .filter(vector_store.EmbeddingStore.collection_id == collection.uuid)
-                .all()
-            )
-            return [Document(page_content=r.document, metadata=r.cmetadata or {}) for r in rows]
-
-    result = vector_store._collection.get(include=["documents", "metadatas"])
-    raw_docs = result.get("documents", [])
-    metas = result.get("metadatas", []) or [{}] * len(raw_docs)
-    return [Document(page_content=t, metadata=m) for t, m in zip(raw_docs, metas)]
+    with vector_store._make_session() as session:
+        collection = vector_store.get_collection(session)
+        if not collection:
+            return []
+        rows = (
+            session.query(vector_store.EmbeddingStore)
+            .filter(vector_store.EmbeddingStore.collection_id == collection.uuid)
+            .all()
+        )
+        return [Document(page_content=r.document, metadata=r.cmetadata or {}) for r in rows]
 
 
 def delete_documents_by_file_id(file_id: str, pipeline: str) -> int:
@@ -157,42 +115,30 @@ def delete_documents_by_file_id(file_id: str, pipeline: str) -> int:
     """
     vector_store = get_vector_store(pipeline)
 
-    if USE_PGVECTOR:
-        with vector_store._make_session() as session:
-            collection = vector_store.get_collection(session)
-            if not collection:
-                return 0
-            rows = (
-                session.query(vector_store.EmbeddingStore)
-                .filter(vector_store.EmbeddingStore.collection_id == collection.uuid)
-                .filter(vector_store.EmbeddingStore.cmetadata["file_id"].astext == file_id)
-                .all()
-            )
-            count = len(rows)
-            for row in rows:
-                session.delete(row)
-            session.commit()
-            return count
-
-    matches = vector_store._collection.get(where={"file_id": file_id}, include=[])
-    ids = matches.get("ids", [])
-    if ids:
-        vector_store._collection.delete(ids=ids)
-    return len(ids)
+    with vector_store._make_session() as session:
+        collection = vector_store.get_collection(session)
+        if not collection:
+            return 0
+        rows = (
+            session.query(vector_store.EmbeddingStore)
+            .filter(vector_store.EmbeddingStore.collection_id == collection.uuid)
+            .filter(vector_store.EmbeddingStore.cmetadata["file_id"].astext == file_id)
+            .all()
+        )
+        count = len(rows)
+        for row in rows:
+            session.delete(row)
+        session.commit()
+        return count
 
 
 def list_collection_names() -> List[str]:
     """Lists every collection name currently stored, for the admin /collections endpoint."""
-    if USE_PGVECTOR:
-        from sqlalchemy import create_engine, text
-        engine = create_engine(DATABASE_URL)
-        with engine.connect() as conn:
-            try:
-                rows = conn.execute(text("SELECT name FROM langchain_pg_collection")).fetchall()
-            except Exception:
-                return []
-            return [r[0] for r in rows]
-
-    import chromadb
-    client = chromadb.PersistentClient(path=CHROMA_BASE_DIR)
-    return [c.name for c in client.list_collections()]
+    from sqlalchemy import create_engine, text
+    engine = create_engine(DATABASE_URL)
+    with engine.connect() as conn:
+        try:
+            rows = conn.execute(text("SELECT name FROM langchain_pg_collection")).fetchall()
+        except Exception:
+            return []
+        return [r[0] for r in rows]

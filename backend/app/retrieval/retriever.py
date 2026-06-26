@@ -35,7 +35,7 @@ def _active_file_ids() -> Optional[set]:
 
 def _file_filter(allowed_file_ids: Optional[List[str]], extra: Optional[dict] = None) -> Optional[dict]:
     """
-    Builds a ChromaDB `where` filter that restricts results to allowed,
+    Builds a pgvector `where` filter that restricts results to allowed,
     active files.
     - allowed_file_ids None → no per-employee restriction (admin sees everything active).
     - [] → empty list means no files are accessible; callers should short-circuit before this.

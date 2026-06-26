@@ -376,8 +376,7 @@ def _retrieve_templates(query: str, top_n: int = 4, per_pipeline_k: int = 3) -> 
     if not scored:
         return []
 
-    # Lower score = closer match, for both Chroma (cosine distance) and
-    # PGVector's default distance strategy.
+    # Lower score = closer match, per PGVector's default distance strategy.
     scored.sort(key=lambda pair: pair[1])
     return [doc for doc, _ in scored[:top_n]]
 
