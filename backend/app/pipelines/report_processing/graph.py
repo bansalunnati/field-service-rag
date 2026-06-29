@@ -1,19 +1,26 @@
 """
 report_processing/graph.py
 
-Wires the 5 nodes into a LangGraph StateGraph with conditional routing on
-routing_decision / LOW_CONFIDENCE eval flags, a SQLite checkpointer for
-HITL persistence, and retry policies on the extraction and RAG nodes.
+Wires 1 orchestrator + 5 worker nodes into a LangGraph StateGraph. Every
+worker returns control to orchestrator_node, which decides what runs next
+purely from state (risk score / LOW_CONFIDENCE eval flags) — that's the
+graph's single source of routing truth instead of routing logic scattered
+across edge lambdas. A SQLite checkpointer persists HITL interrupts, and
+retry policies cover the extraction and RAG nodes.
 
 Graph shape:
 
-    START -> document_extraction -> policy_rag -> compliance_risk
-        -> AUTO_APPROVE / AUTO_REJECT (clean)        -> report_synthesis -> END
-        -> ESCALATE_TO_HUMAN                         -> hitl_coordinator -> report_synthesis -> END
-        -> any *_LOW_CONFIDENCE flag                 -> hitl_coordinator -> report_synthesis -> END
+    START -> orchestrator
+        -> document_extraction -> orchestrator
+        -> policy_rag           -> orchestrator
+        -> compliance_risk      -> orchestrator
+            -> AUTO_APPROVE / AUTO_REJECT (clean)  -> report_synthesis -> END
+            -> ESCALATE_TO_HUMAN                   -> hitl_coordinator -> report_synthesis -> END
+            -> any *_LOW_CONFIDENCE flag            -> hitl_coordinator -> report_synthesis -> END
 
-    Q&A shortcut: if qa_query is set on the input state, document_extraction
-    is skipped and the graph goes straight to policy_rag -> END.
+    Q&A shortcut: if qa_query is set on the input state, orchestrator sends
+    the run straight to policy_rag -> orchestrator -> END, skipping
+    document_extraction and compliance_risk entirely.
 """
 
 import os
@@ -25,6 +32,7 @@ from langgraph.types import RetryPolicy
 
 from app.pipelines.report_processing.state import GraphState, new_state
 from app.pipelines.report_processing.nodes import (
+    orchestrator_node,
     document_extraction_node,
     policy_rag_node,
     compliance_risk_node,
@@ -47,16 +55,14 @@ def _get_checkpointer():
     return SqliteSaver(conn)
 
 
-def _route_after_extraction(state: GraphState) -> str:
-    """Q&A shortcut: skip extraction/compliance entirely if qa_query is set."""
-    return "policy_rag_qa_only" if state.get("qa_query") else "policy_rag"
-
-
-def _route_after_compliance(state: GraphState) -> str:
-    decision = state.get("routing_decision", "")
-    if "LOW_CONFIDENCE" in decision or decision.startswith("ESCALATE_TO_HUMAN"):
-        return "hitl_coordinator"
-    return "report_synthesis"
+_NEXT_AGENT_DESTINATIONS = {
+    "document_extraction_node": "document_extraction_node",
+    "policy_rag_node": "policy_rag_node",
+    "compliance_risk_node": "compliance_risk_node",
+    "hitl_coordinator_node": "hitl_coordinator_node",
+    "report_synthesis_node": "report_synthesis_node",
+    "END": END,
+}
 
 
 def build_graph():
@@ -65,31 +71,24 @@ def build_graph():
     extraction_retry = RetryPolicy(max_attempts=3)
     rag_retry = RetryPolicy(max_attempts=3)
 
+    graph.add_node("orchestrator_node", orchestrator_node)
     graph.add_node("document_extraction_node", document_extraction_node, retry_policy=extraction_retry)
     graph.add_node("policy_rag_node", policy_rag_node, retry_policy=rag_retry)
     graph.add_node("compliance_risk_node", compliance_risk_node)
     graph.add_node("hitl_coordinator_node", hitl_coordinator_node)
     graph.add_node("report_synthesis_node", report_synthesis_node)
 
-    graph.add_conditional_edges(
-        START,
-        lambda state: "qa_shortcut" if state.get("qa_query") else "full_pipeline",
-        {"qa_shortcut": "policy_rag_node", "full_pipeline": "document_extraction_node"},
-    )
-
-    graph.add_edge("document_extraction_node", "policy_rag_node")
+    graph.add_edge(START, "orchestrator_node")
 
     graph.add_conditional_edges(
-        "policy_rag_node",
-        lambda state: "qa_end" if state.get("qa_query") else "continue",
-        {"qa_end": END, "continue": "compliance_risk_node"},
+        "orchestrator_node",
+        lambda state: state["next_agent"],
+        _NEXT_AGENT_DESTINATIONS,
     )
 
-    graph.add_conditional_edges(
-        "compliance_risk_node",
-        _route_after_compliance,
-        {"hitl_coordinator": "hitl_coordinator_node", "report_synthesis": "report_synthesis_node"},
-    )
+    graph.add_edge("document_extraction_node", "orchestrator_node")
+    graph.add_edge("policy_rag_node", "orchestrator_node")
+    graph.add_edge("compliance_risk_node", "orchestrator_node")
 
     graph.add_edge("hitl_coordinator_node", "report_synthesis_node")
     graph.add_edge("report_synthesis_node", END)

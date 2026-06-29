@@ -33,6 +33,34 @@ def _flag_low_confidence(routing_decision: str, eval_score: Dict[str, Any]) -> s
     return routing_decision
 
 
+# ── 0. orchestrator_node ─────────────────────────────────────────────────────
+
+def orchestrator_node(state: GraphState) -> Dict[str, Any]:
+    """
+    Decides which of the 5 worker agents runs next, purely from what's already
+    in state — no side effects on report fields. Every worker node returns
+    control here, so this is the single place the pipeline's control flow is
+    decided, instead of being scattered across conditional-edge lambdas.
+    """
+    qa_query = state.get("qa_query")
+
+    if "extraction_result" not in state and "policy_context" not in state:
+        next_agent = "policy_rag_node" if qa_query else "document_extraction_node"
+    elif "extraction_result" in state and "policy_context" not in state:
+        next_agent = "policy_rag_node"
+    elif "policy_context" in state and "compliance_verdicts" not in state:
+        next_agent = "END" if qa_query else "compliance_risk_node"
+    else:
+        decision = state.get("routing_decision", "")
+        next_agent = (
+            "hitl_coordinator_node"
+            if ("LOW_CONFIDENCE" in decision or decision.startswith("ESCALATE_TO_HUMAN"))
+            else "report_synthesis_node"
+        )
+
+    return {"next_agent": next_agent}
+
+
 # ── 1. document_extraction_node ─────────────────────────────────────────────
 
 def document_extraction_node(state: GraphState) -> Dict[str, Any]:

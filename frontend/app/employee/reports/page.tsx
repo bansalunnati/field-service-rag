@@ -5,8 +5,15 @@ import { useRouter } from "next/navigation";
 import { Card, CardContent } from "@/components/ui/card";
 import { submitReport, getMyReports, previewReport } from "@/services/reports";
 import { getTasks, Task } from "@/services/tasks";
-import { Upload, Loader2, Eye, MessageCircle } from "lucide-react";
+import { Upload, Loader2, Eye, MessageCircle, ArrowLeft, ArrowRight } from "lucide-react";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
+import { Stepper } from "@/components/ui/stepper";
+
+const SUBMIT_STEPS = [
+  { label: "Task", description: "Pick what this is for" },
+  { label: "Details & File", description: "Title, type, attach file" },
+  { label: "Review & Submit", description: "Confirm and send" },
+];
 
 const STATUS_STYLES: Record<string, string> = {
   pending: "bg-amber-100 text-amber-700",
@@ -36,6 +43,8 @@ export default function EmployeeReportsPage() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [tasksLoading, setTasksLoading] = useState(true);
   const [taskId, setTaskId] = useState("");
+  const [step, setStep] = useState(0);
+  const [selectedFileName, setSelectedFileName] = useState("");
   const { notify } = useConfirmDialog();
 
   // Only tasks still in progress are valid things to submit a report
@@ -118,8 +127,10 @@ export default function EmployeeReportsPage() {
       setTitle("");
       setReportType("other");
       setTaskId("");
+      setSelectedFileName("");
       if (fileRef.current) fileRef.current.value = "";
       setSubmitResult("Report submitted successfully. It is now under review.");
+      setStep(0);
       await load();
       await loadTasks();
     } catch (err: any) {
@@ -128,6 +139,13 @@ export default function EmployeeReportsPage() {
       setSubmitting(false);
     }
   };
+
+  const selectedTask = activeTasks.find((t) => t.id === taskId);
+  const canAdvanceFromStep0 = !!taskId;
+  const canAdvanceFromStep1 = !!title.trim() && !!selectedFileName;
+
+  const goNext = () => setStep((s) => Math.min(s + 1, SUBMIT_STEPS.length - 1));
+  const goBack = () => setStep((s) => Math.max(s - 1, 0));
 
   return (
     <div className="space-y-6">
@@ -143,78 +161,112 @@ export default function EmployeeReportsPage() {
               report for. Ask your admin to assign a task first.
             </p>
           ) : (
-          <div className="space-y-3">
-            <div>
-              <label className="text-xs text-muted-foreground block mb-1">
-                Which task is this report for?
-              </label>
-              <select
-                value={taskId}
-                onChange={(e) => setTaskId(e.target.value)}
-                disabled={tasksLoading}
-                className="w-full rounded border px-3 py-2 text-sm bg-background"
-              >
-                <option value="">Select an assigned task…</option>
-                {activeTasks.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.title} ({t.status === "in_progress" ? "In Progress" : "Open"})
-                  </option>
-                ))}
-              </select>
-            </div>
-            <input
-              className="w-full rounded border px-3 py-2 text-sm bg-background"
-              placeholder="Report title"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-            />
-            <div className="flex flex-wrap gap-3 items-end">
-              <div>
+          <div className="space-y-5">
+            <Stepper steps={SUBMIT_STEPS} currentStep={step} />
+
+            {step === 0 && (
+              <div className="space-y-3">
                 <label className="text-xs text-muted-foreground block mb-1">
-                  Report Type
+                  Which task is this report for?
                 </label>
                 <select
-                  value={reportType}
-                  onChange={(e) => setReportType(e.target.value)}
-                  className="rounded border px-3 py-2 text-sm bg-background"
+                  value={taskId}
+                  onChange={(e) => setTaskId(e.target.value)}
+                  disabled={tasksLoading}
+                  className="w-full rounded border px-3 py-2 text-sm bg-background"
                 >
-                  {REPORT_TYPES.map((t) => (
-                    <option key={t.value} value={t.value}>
-                      {t.label}
+                  <option value="">Select an assigned task…</option>
+                  {activeTasks.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.title} ({t.status === "in_progress" ? "In Progress" : "Open"})
                     </option>
                   ))}
                 </select>
               </div>
-              <div>
-                <label className="text-xs text-muted-foreground block mb-1">
-                  Attach Report File (PDF, DOCX, TXT, PNG, JPG)
-                  <span className="ml-1 rounded bg-primary/10 text-primary px-1.5 py-0.5 text-[10px] font-medium">
-                    field_reports pipeline
-                  </span>
-                  <span className="ml-1 rounded bg-amber-100 text-amber-700 px-1.5 py-0.5 text-[10px] font-medium">
-                    images OCR&apos;d automatically
-                  </span>
-                </label>
+            )}
+
+            {step === 1 && (
+              <div className="space-y-3">
                 <input
-                  ref={fileRef}
-                  type="file"
-                  accept=".pdf,.docx,.txt,.png,.jpg,.jpeg"
-                  className="text-sm"
+                  className="w-full rounded border px-3 py-2 text-sm bg-background"
+                  placeholder="Report title"
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
                 />
+                <div className="flex flex-wrap gap-3 items-end">
+                  <div>
+                    <label className="text-xs text-muted-foreground block mb-1">
+                      Report Type
+                    </label>
+                    <select
+                      value={reportType}
+                      onChange={(e) => setReportType(e.target.value)}
+                      className="rounded border px-3 py-2 text-sm bg-background"
+                    >
+                      {REPORT_TYPES.map((t) => (
+                        <option key={t.value} value={t.value}>
+                          {t.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs text-muted-foreground block mb-1">
+                      Attach Report File (PDF, DOCX, TXT, PNG, JPG)
+                      <span className="ml-1 rounded bg-primary/10 text-primary px-1.5 py-0.5 text-[10px] font-medium">
+                        field_reports pipeline
+                      </span>
+                      <span className="ml-1 rounded bg-amber-100 text-amber-700 px-1.5 py-0.5 text-[10px] font-medium">
+                        images OCR&apos;d automatically
+                      </span>
+                    </label>
+                    <input
+                      ref={fileRef}
+                      type="file"
+                      accept=".pdf,.docx,.txt,.png,.jpg,.jpeg"
+                      className="text-sm"
+                      onChange={(e) => setSelectedFileName(e.target.files?.[0]?.name ?? "")}
+                    />
+                  </div>
+                </div>
               </div>
-            </div>
-            <button
-              onClick={handleSubmit}
-              disabled={submitting}
-              className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm text-primary-foreground hover:opacity-90 disabled:opacity-50"
-            >
-              {submitting ? (
-                <Loader2 size={15} className="animate-spin" />
-              ) : (
-                <Upload size={15} />
-              )}
-              Submit Report
-            </button>
+            )}
+
+            {step === 2 && (
+              <div className="space-y-3">
+                <div className="rounded-lg border px-4 py-3 text-sm space-y-1.5">
+                  <p>
+                    <span className="text-muted-foreground">Task: </span>
+                    {selectedTask?.title ?? "—"}
+                  </p>
+                  <p>
+                    <span className="text-muted-foreground">Title: </span>
+                    {title || "—"}
+                  </p>
+                  <p>
+                    <span className="text-muted-foreground">Type: </span>
+                    {REPORT_TYPES.find((t) => t.value === reportType)?.label ?? reportType}
+                  </p>
+                  <p>
+                    <span className="text-muted-foreground">File: </span>
+                    {selectedFileName || "—"}
+                  </p>
+                </div>
+                <button
+                  onClick={handleSubmit}
+                  disabled={submitting}
+                  className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm text-primary-foreground hover:opacity-90 disabled:opacity-50"
+                >
+                  {submitting ? (
+                    <Loader2 size={15} className="animate-spin" />
+                  ) : (
+                    <Upload size={15} />
+                  )}
+                  Submit Report
+                </button>
+              </div>
+            )}
+
             {submitResult && (
               <p
                 className={`text-sm rounded px-3 py-2 ${
@@ -226,6 +278,27 @@ export default function EmployeeReportsPage() {
                 {submitResult}
               </p>
             )}
+
+            <div className="flex justify-between pt-1">
+              <button
+                onClick={goBack}
+                disabled={step === 0}
+                className="flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm hover:bg-muted/40 disabled:opacity-40"
+              >
+                <ArrowLeft size={14} />
+                Back
+              </button>
+              {step < SUBMIT_STEPS.length - 1 && (
+                <button
+                  onClick={goNext}
+                  disabled={(step === 0 && !canAdvanceFromStep0) || (step === 1 && !canAdvanceFromStep1)}
+                  className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground hover:opacity-90 disabled:opacity-50"
+                >
+                  Next
+                  <ArrowRight size={14} />
+                </button>
+              )}
+            </div>
           </div>
           )}
         </CardContent>

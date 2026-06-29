@@ -84,6 +84,9 @@ class GraphState(TypedDict, total=False):
     # ── Evaluation layer ────────────────────────────────────────────────────
     eval_scores: Dict[str, EvalScore]
 
+    # ── Orchestrator routing ────────────────────────────────────────────────
+    next_agent: str
+
 
 class ReportStateModel(BaseModel):
     """Pydantic validation wrapper for GraphState at pipeline boundaries."""

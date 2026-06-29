@@ -6,6 +6,12 @@ import { getHitlQueue, approveReport, rejectReport } from "@/services/hitl";
 import { previewReport } from "@/services/reports";
 import { CheckCircle, XCircle, Loader2, Eye } from "lucide-react";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
+import { Stepper } from "@/components/ui/stepper";
+
+const REVIEW_STEPS = [
+  { label: "Preview", description: "Open the file" },
+  { label: "Decide", description: "Approve or reject" },
+];
 
 export default function HitlPage() {
   const [queue, setQueue] = useState<any[]>([]);
@@ -13,12 +19,14 @@ export default function HitlPage() {
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [processing, setProcessing] = useState<string | null>(null);
   const [previewingId, setPreviewingId] = useState<string | null>(null);
+  const [previewedIds, setPreviewedIds] = useState<Set<string>>(new Set());
   const { notify } = useConfirmDialog();
 
   const handlePreview = async (reportId: string) => {
     setPreviewingId(reportId);
     try {
       await previewReport(reportId);
+      setPreviewedIds((prev) => new Set(prev).add(reportId));
     } catch {
       await notify("Preview failed. The file may no longer be available.", { destructive: true });
     } finally {
@@ -83,6 +91,7 @@ export default function HitlPage() {
         <div className="space-y-4">
           {queue.map((item: any) => {
             const reportId = item.report_id ?? item.id;
+            const hasPreviewed = previewedIds.has(reportId);
             return (
               <Card key={item.review_id ?? reportId}>
                 <CardContent className="p-5">
@@ -101,6 +110,10 @@ export default function HitlPage() {
                         Escalated: {item.hitl_reason}
                       </p>
                     )}
+                  </div>
+
+                  <div className="mt-4 max-w-xs">
+                    <Stepper steps={REVIEW_STEPS} currentStep={hasPreviewed ? 1 : 0} />
                   </div>
 
                   <div className="mt-4 flex flex-wrap items-center gap-3">
@@ -126,7 +139,8 @@ export default function HitlPage() {
                     />
                     <button
                       onClick={() => handleDecision(reportId, "approved")}
-                      disabled={processing === reportId}
+                      disabled={processing === reportId || !hasPreviewed}
+                      title={hasPreviewed ? undefined : "Preview the file before deciding"}
                       className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-sm text-white hover:opacity-90 disabled:opacity-50"
                     >
                       {processing === reportId ? (
@@ -138,7 +152,8 @@ export default function HitlPage() {
                     </button>
                     <button
                       onClick={() => handleDecision(reportId, "rejected")}
-                      disabled={processing === reportId}
+                      disabled={processing === reportId || !hasPreviewed}
+                      title={hasPreviewed ? undefined : "Preview the file before deciding"}
                       className="flex items-center gap-1.5 rounded-lg bg-destructive px-4 py-2 text-sm text-white hover:opacity-90 disabled:opacity-50"
                     >
                       <XCircle size={14} />
